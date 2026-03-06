@@ -1,0 +1,57 @@
+---
+tracker:
+  kind: github
+  repo: "owner/repo"
+  api_key: $GITHUB_TOKEN
+  labels:
+    - symphony
+  active_states:
+    - open
+  terminal_states:
+    - closed
+polling:
+  interval_ms: 30000
+workspace:
+  root: /tmp/symphony_workspaces
+hooks:
+  after_create: |
+    git clone --depth 1 "https://github.com/{{ repo }}" .
+  timeout_ms: 60000
+agent:
+  max_concurrent_agents: 5
+  max_turns: 10
+claude:
+  command: claude
+  model: claude-sonnet-4-20250514
+  skip_permissions: true
+  max_turns_per_invocation: 50
+  turn_timeout_ms: 3600000
+  read_timeout_ms: 5000
+  stall_timeout_ms: 300000
+---
+
+You are working on GitHub Issue #{{ issue.identifier }}
+
+{% if attempt %}
+This is continuation attempt #{{ attempt }}. Resume from current workspace state.
+{% endif %}
+
+Issue: #{{ issue.identifier }} - {{ issue.title }}
+State: {{ issue.state }}
+Labels: {{ issue.labels }}
+URL: {{ issue.url }}
+
+Description:
+{% if issue.description %}
+{{ issue.description }}
+{% else %}
+No description provided.
+{% endif %}
+
+Instructions:
+1. This is an unattended session. Do not ask for human input.
+2. Work only in the provided workspace directory.
+3. Create a feature branch from main, implement the changes, and push.
+4. Create a Pull Request using `gh pr create`.
+5. If blocked, add a comment to the issue explaining the blocker.
+6. Only stop if you encounter a true blocker (missing auth, permissions, secrets).

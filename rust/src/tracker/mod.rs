@@ -1,8 +1,10 @@
 //! Tracker trait and implementations (SPEC §11)
 
 mod memory;
+mod github;
 
 pub use memory::MemoryTracker;
+pub use github::{GitHubTracker, GitHubConfig};
 
 use async_trait::async_trait;
 use thiserror::Error;
