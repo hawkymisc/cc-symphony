@@ -350,8 +350,27 @@ impl<T: Tracker + 'static, A: AgentRunner + 'static> Orchestrator<T, A> {
                     }
                 }
                 Err(e) => {
-                    warn!(issue_id = %issue_id, error = %e, "Failed to fetch issue for retry");
-                    state.claimed.remove(&issue_id);
+                    warn!(issue_id = %issue_id, error = %e, "Failed to fetch issue for retry; rescheduling");
+                    // Transient tracker error — reschedule retry with same failure count
+                    // so exponential backoff is preserved across tracker outages.
+                    let tx = self.tx.clone();
+                    let id = issue_id.clone();
+                    let backoff_ms = compute_backoff(
+                        ExitType::Failure,
+                        prior_failures.max(1),
+                        self.config.agent.max_retry_backoff_ms,
+                    );
+                    let timer_handle = tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                        let _ = tx.send(OrchestratorMsg::RetryIssue { issue_id: id });
+                    });
+                    state.retry_attempts.insert(issue_id.clone(), crate::domain::RetryEntry {
+                        attempt: prior_failures,
+                        due_at: std::time::Instant::now() + Duration::from_millis(backoff_ms),
+                        timer_handle,
+                        identifier: None,
+                        error: Some(e.to_string()),
+                    });
                 }
             }
         }
