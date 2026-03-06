@@ -21,8 +21,11 @@ fn fixtures_dir() -> PathBuf {
 fn make_config(mock_script: &str) -> AppConfig {
     let mut config = AppConfig::default();
     config.claude.command = fixtures_dir().join(mock_script).to_string_lossy().to_string();
-    // Workspace root: tmp dir so tests don't clash
-    config.workspace.root = std::env::temp_dir().join("symphony_agent_tests");
+    // Workspace root: unique temp dir per test to avoid cross-test contamination
+    config.workspace.root = std::env::temp_dir().join(format!(
+        "symphony_agent_test_{}",
+        uuid::Uuid::new_v4()
+    ));
     config
 }
 
@@ -140,21 +143,36 @@ async fn run_nonzero_exit_returns_process_exit_err() {
 
 /// ClaudeRunner returns Ok when cancelled mid-run.
 #[tokio::test]
-async fn run_cancellation_returns_ok() {
-    // slow.sh would block, but success.sh is fast. We cancel before spawn.
-    let config = make_config("success.sh");
+async fn run_mid_run_cancellation_returns_ok() {
+    let config = make_config("slow.sh");
     let issue = make_issue("I_7", "7");
 
     let runner = ClaudeRunner;
-    let (tx, _rx) = mpsc::unbounded_channel::<(String, AgentUpdate)>();
+    let (tx, mut rx) = mpsc::unbounded_channel::<(String, AgentUpdate)>();
     let cancel = CancellationToken::new();
 
-    // Cancel immediately before running
+    // Spawn the runner in a separate task
+    let cancel_clone = cancel.clone();
+    let handle = tokio::spawn(async move {
+        runner.run(&issue, None, &config, tx, cancel_clone).await
+    });
+
+    // Give the process time to spawn and start
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    // Cancel mid-run
     cancel.cancel();
 
-    let result = runner.run(&issue, None, &config, tx, cancel).await;
-    // Cancelled before first line is read → Ok(())
+    // Wait for the runner to complete
+    let result = handle.await.expect("task should not panic");
+
+    // Cancelled mid-run should return Ok(())
     assert!(result.is_ok(), "Cancelled run should return Ok; got: {:?}", result);
+
+    // Collect any updates that were sent before cancellation
+    while let Ok((_, _)) = rx.try_recv() {
+        // Just drain the channel
+    }
 }
 
 // ─── command not found ────────────────────────────────────────────────────────
@@ -164,7 +182,10 @@ async fn run_cancellation_returns_ok() {
 async fn run_missing_command_returns_claude_not_found() {
     let mut config = AppConfig::default();
     config.claude.command = "/nonexistent/path/to/claude".to_string();
-    config.workspace.root = std::env::temp_dir().join("symphony_agent_tests");
+    config.workspace.root = std::env::temp_dir().join(format!(
+        "symphony_agent_test_{}",
+        uuid::Uuid::new_v4()
+    ));
 
     let issue = make_issue("I_8", "8");
     let runner = ClaudeRunner;

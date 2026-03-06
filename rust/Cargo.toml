@@ -48,6 +48,7 @@ wiremock = "0.6"
 assert_cmd = "2"
 predicates = "3"
 temp-env = "0.3"
+uuid = { version = "1", features = ["v4"] }
 
 [features]
 default = ["github-issues"]
