@@ -155,7 +155,7 @@ impl<T: Tracker + 'static, A: AgentRunner + 'static> Orchestrator<T, A> {
 
                 // Dispatch selected issues
                 for issue in to_dispatch {
-                    self.dispatch_issue(state, issue).await;
+                    self.dispatch_issue(state, issue, 0).await;
                 }
 
                 // Reconcile running issues
@@ -167,7 +167,7 @@ impl<T: Tracker + 'static, A: AgentRunner + 'static> Orchestrator<T, A> {
         }
     }
 
-    async fn dispatch_issue(&self, state: &mut OrchestratorState, issue: Issue) {
+    async fn dispatch_issue(&self, state: &mut OrchestratorState, issue: Issue, consecutive_failures: u32) {
         let issue_id = issue.id.clone();
         let identifier = issue.identifier.clone();
 
@@ -183,12 +183,7 @@ impl<T: Tracker + 'static, A: AgentRunner + 'static> Orchestrator<T, A> {
         let config = self.config.clone();
         let agent_runner = Arc::clone(&self.agent_runner);
         let issue_clone = issue.clone();
-        let attempt = state.retry_attempts.get(&issue_id).map(|r| r.attempt);
-        // Carry over consecutive failure count so backoff survives handle_retry removing the entry
-        let consecutive_failures = state.retry_attempts.get(&issue_id)
-            .filter(|r| r.error.is_some())
-            .map(|r| r.attempt)
-            .unwrap_or(0);
+        let attempt = if consecutive_failures > 0 { Some(consecutive_failures) } else { None };
 
         let (update_tx, mut update_rx) = mpsc::unbounded_channel::<(String, AgentUpdate)>();
 
@@ -335,14 +330,16 @@ impl<T: Tracker + 'static, A: AgentRunner + 'static> Orchestrator<T, A> {
     }
 
     async fn handle_retry(&self, state: &mut OrchestratorState, issue_id: String) {
-        // Remove from retry queue
-        if state.retry_attempts.remove(&issue_id).is_some() {
+        // Remove from retry queue and capture prior failure count before dispatch
+        if let Some(removed_entry) = state.retry_attempts.remove(&issue_id) {
+            let prior_failures = if removed_entry.error.is_some() { removed_entry.attempt } else { 0 };
+
             // Re-fetch issue and dispatch if still active
             match self.tracker.fetch_issues_by_ids(&[issue_id.clone()]).await {
                 Ok(issues) => {
                     if let Some(issue) = issues.into_iter().next() {
                         if issue.is_active() && state.running.len() < state.max_concurrent_agents {
-                            self.dispatch_issue(state, issue).await;
+                            self.dispatch_issue(state, issue, prior_failures).await;
                         } else {
                             // Issue no longer active or no slots
                             state.claimed.remove(&issue_id);
