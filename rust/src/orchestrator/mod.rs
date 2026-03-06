@@ -10,18 +10,20 @@ pub use state::{OrchestratorState, RunningEntry};
 pub use dispatch::select_candidates;
 pub use retry::{compute_backoff, ExitType};
 
-use std::collections::{HashMap, HashSet};
-use std::time::{Duration, Instant};
+use std::collections::HashSet;
+use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::sync::mpsc::{self, UnboundedReceiver};
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn, error};
+use tracing::{info, warn};
 
 use crate::config::AppConfig;
-use crate::domain::Issue;
+use crate::domain::{Issue, RetryEntry};
 use crate::tracker::Tracker;
 use crate::agent::{AgentRunner, AgentUpdate};
 use crate::observability::RuntimeSnapshot;
+use crate::workspace::{run_before_run_hook, run_after_run_hook};
 
 /// Messages sent to the orchestrator
 #[derive(Debug)]
@@ -59,26 +61,28 @@ pub enum OrchestratorMsg {
 /// Orchestrator that manages issue dispatch and agent execution
 pub struct Orchestrator<T: Tracker, A: AgentRunner> {
     tracker: T,
-    agent_runner: A,
+    agent_runner: Arc<A>,
     config: AppConfig,
+    tx: mpsc::UnboundedSender<OrchestratorMsg>,
     rx: UnboundedReceiver<OrchestratorMsg>,
 }
 
-impl<T: Tracker, A: AgentRunner> Orchestrator<T, A> {
+impl<T: Tracker + 'static, A: AgentRunner + 'static> Orchestrator<T, A> {
     /// Create a new orchestrator
     pub fn new(tracker: T, agent_runner: A, config: AppConfig) -> (Self, mpsc::UnboundedSender<OrchestratorMsg>) {
         let (tx, rx) = mpsc::unbounded_channel();
         let orchestrator = Self {
             tracker,
-            agent_runner,
+            agent_runner: Arc::new(agent_runner),
             config,
+            tx: tx.clone(),
             rx,
         };
         (orchestrator, tx)
     }
 
     /// Run the orchestrator event loop
-    pub async fn run(mut self, mut cancel: CancellationToken) {
+    pub async fn run(mut self, cancel: CancellationToken) {
         let mut state = OrchestratorState::new(&self.config);
         let mut interval = tokio::time::interval(Duration::from_millis(self.config.polling.interval_ms));
 
@@ -172,16 +176,55 @@ impl<T: Tracker, A: AgentRunner> Orchestrator<T, A> {
         // Mark as claimed
         state.claimed.insert(issue_id.clone());
 
-        // Create cancellation token
         let cancel_token = CancellationToken::new();
-
-        // Spawn worker task
-        let issue_clone = issue.clone();
         let cancel_clone = cancel_token.clone();
 
-        // For now, just create the entry without spawning
-        // (Full implementation would spawn tokio task)
+        let tx = self.tx.clone();
+        let config = self.config.clone();
+        let agent_runner = Arc::clone(&self.agent_runner);
+        let issue_clone = issue.clone();
+        let attempt = state.retry_attempts.get(&issue_id).map(|r| r.attempt);
+
+        let (update_tx, mut update_rx) = mpsc::unbounded_channel::<(String, AgentUpdate)>();
+
+        // Forward agent updates to the orchestrator channel
+        let tx_forward = tx.clone();
+        tokio::spawn(async move {
+            while let Some((id, update)) = update_rx.recv().await {
+                let _ = tx_forward.send(OrchestratorMsg::AgentUpdate { issue_id: id, update });
+            }
+        });
+
+        let tx_finish = tx.clone();
+        let workspace_path = config.workspace.root.join(issue_clone.sanitized_identifier());
+        let hooks = config.hooks.clone();
+
+        let task_handle = tokio::spawn(async move {
+            // Run before_run hook (fatal on failure)
+            if let Err(e) = run_before_run_hook(&workspace_path, &hooks).await {
+                warn!("before_run hook failed: {}", e);
+                let _ = tx_finish.send(OrchestratorMsg::WorkerFinished {
+                    issue_id: issue_clone.id.clone(),
+                    result: Err(crate::agent::AgentError::SpawnFailed(e.to_string())),
+                });
+                return;
+            }
+
+            let result = agent_runner
+                .run(&issue_clone, attempt, &config, update_tx, cancel_clone)
+                .await;
+
+            // Run after_run hook (non-fatal)
+            run_after_run_hook(&workspace_path, &hooks).await;
+
+            let _ = tx_finish.send(OrchestratorMsg::WorkerFinished {
+                issue_id: issue_clone.id.clone(),
+                result,
+            });
+        });
+
         let entry = RunningEntry {
+            task_handle: Some(task_handle),
             identifier,
             issue,
             cancel_token,
@@ -199,27 +242,58 @@ impl<T: Tracker, A: AgentRunner> Orchestrator<T, A> {
         result: Result<(), crate::agent::AgentError>,
     ) {
         if let Some(entry) = state.running.remove(&issue_id) {
-            state.claimed.remove(&issue_id);
+            let identifier = entry.identifier.clone();
 
             match result {
                 Ok(()) => {
-                    info!(issue_id = %issue_id, "Worker finished successfully");
-                    // Normal exit -> short continuation delay
-                    // In full implementation, schedule retry with 1s delay
+                    info!(issue_id = %issue_id, identifier = %identifier, "Worker finished successfully");
+                    // Normal exit -> short continuation delay, then retry if issue still active
+                    let tx = self.tx.clone();
+                    let id = issue_id.clone();
+                    let timer_handle = tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_millis(1_000)).await;
+                        let _ = tx.send(OrchestratorMsg::RetryIssue { issue_id: id });
+                    });
+
+                    let attempt = state.retry_attempts.get(&issue_id)
+                        .map(|r| r.attempt)
+                        .unwrap_or(0)
+                        + 1;
+
+                    state.retry_attempts.insert(issue_id.clone(), RetryEntry {
+                        attempt,
+                        due_at: std::time::Instant::now() + Duration::from_millis(1_000),
+                        timer_handle,
+                        identifier: Some(identifier),
+                        error: None,
+                    });
                 }
                 Err(e) => {
-                    warn!(issue_id = %issue_id, error = %e, "Worker failed");
-                    // Schedule retry with backoff
+                    warn!(issue_id = %issue_id, identifier = %identifier, error = %e, "Worker failed");
+
                     let attempt = state.retry_attempts.get(&issue_id)
                         .map(|r| r.attempt + 1)
                         .unwrap_or(1);
                     let backoff_ms = compute_backoff(
                         ExitType::Failure,
                         attempt,
-                        self.config.agent.max_retry_backoff_ms
+                        self.config.agent.max_retry_backoff_ms,
                     );
 
-                    // In full implementation, schedule timer
+                    let tx = self.tx.clone();
+                    let id = issue_id.clone();
+                    let timer_handle = tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                        let _ = tx.send(OrchestratorMsg::RetryIssue { issue_id: id });
+                    });
+
+                    state.retry_attempts.insert(issue_id.clone(), RetryEntry {
+                        attempt,
+                        due_at: std::time::Instant::now() + Duration::from_millis(backoff_ms),
+                        timer_handle,
+                        identifier: Some(identifier),
+                        error: Some(e.to_string()),
+                    });
                 }
             }
         }
@@ -231,13 +305,13 @@ impl<T: Tracker, A: AgentRunner> Orchestrator<T, A> {
 
             match update {
                 AgentUpdate::Event { event_type, message, input_tokens, output_tokens } => {
-                    entry.last_event = Some(event_type.clone().into());
+                    entry.last_event = Some(event_type);
                     entry.last_event_message = message;
                     entry.input_tokens += input_tokens;
                     entry.output_tokens += output_tokens;
                     entry.total_tokens = entry.input_tokens + entry.output_tokens;
                 }
-                AgentUpdate::TurnComplete { success, final_message } => {
+                AgentUpdate::TurnComplete { .. } => {
                     entry.turn_count += 1;
                 }
                 _ => {}
@@ -247,7 +321,7 @@ impl<T: Tracker, A: AgentRunner> Orchestrator<T, A> {
 
     async fn handle_retry(&self, state: &mut OrchestratorState, issue_id: String) {
         // Remove from retry queue
-        if let Some(_) = state.retry_attempts.remove(&issue_id) {
+        if state.retry_attempts.remove(&issue_id).is_some() {
             // Re-fetch issue and dispatch if still active
             match self.tracker.fetch_issues_by_ids(&[issue_id.clone()]).await {
                 Ok(issues) => {
@@ -255,7 +329,7 @@ impl<T: Tracker, A: AgentRunner> Orchestrator<T, A> {
                         if issue.is_active() && state.running.len() < state.max_concurrent_agents {
                             self.dispatch_issue(state, issue).await;
                         } else {
-                            // Re-queue or release
+                            // Issue no longer active or no slots
                             state.claimed.remove(&issue_id);
                         }
                     } else {
@@ -265,6 +339,7 @@ impl<T: Tracker, A: AgentRunner> Orchestrator<T, A> {
                 }
                 Err(e) => {
                     warn!(issue_id = %issue_id, error = %e, "Failed to fetch issue for retry");
+                    state.claimed.remove(&issue_id);
                 }
             }
         }
@@ -273,10 +348,10 @@ impl<T: Tracker, A: AgentRunner> Orchestrator<T, A> {
     async fn reconcile(&self, state: &mut OrchestratorState, candidates: &[Issue]) {
         let candidate_ids: HashSet<String> = candidates.iter().map(|i| i.id.clone()).collect();
 
-        // Check each running issue
+        // Check each running issue for stalls or removal from candidates
         let to_stop: Vec<String> = state.running.iter()
             .filter_map(|(id, entry)| {
-                // Issue no longer in candidates
+                // Issue no longer in candidates (closed/moved)
                 if !candidate_ids.contains(id) {
                     return Some(id.clone());
                 }
@@ -294,7 +369,7 @@ impl<T: Tracker, A: AgentRunner> Orchestrator<T, A> {
             })
             .collect();
 
-        // Stop stalled or removed issues
+        // Cancel stalled or removed issues
         for id in to_stop {
             if let Some(entry) = state.running.remove(&id) {
                 entry.cancel_token.cancel();
