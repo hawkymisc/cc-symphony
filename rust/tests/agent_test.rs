@@ -215,7 +215,6 @@ async fn run_missing_command_returns_claude_not_found() {
 // ─── retry attempt in prompt ──────────────────────────────────────────────────
 
 /// ClaudeRunner handles different retry attempt values without error.
-/// The actual attempt value is embedded in the prompt passed to the CLI.
 #[tokio::test]
 async fn run_with_different_retry_attempts_succeeds() {
     // Test with attempt = Some(1) - first retry
@@ -229,7 +228,6 @@ async fn run_with_different_retry_attempts_succeeds() {
     let result = runner.run(&issue, Some(1), &config, tx, cancel).await;
     assert!(result.is_ok(), "Run with attempt=1 should succeed; got: {:?}", result);
 
-    // Collect updates
     let mut updates = Vec::new();
     while let Ok((_, upd)) = rx.try_recv() {
         updates.push(upd);
@@ -246,10 +244,59 @@ async fn run_with_different_retry_attempts_succeeds() {
     let result = runner.run(&issue, Some(3), &config, tx, cancel).await;
     assert!(result.is_ok(), "Run with attempt=3 should succeed; got: {:?}", result);
 
-    // Collect updates
     let mut updates = Vec::new();
     while let Ok((_, upd)) = rx.try_recv() {
         updates.push(upd);
     }
     assert!(updates.iter().any(|u| matches!(u, AgentUpdate::TurnComplete { .. })));
+}
+
+/// ClaudeRunner embeds the attempt value in the prompt.
+/// The mock (verify_attempt.sh) fails if "continuation attempt" is not in the prompt.
+#[tokio::test]
+async fn run_retry_attempt_embedded_in_prompt() {
+    let config = make_config("verify_attempt.sh");
+    let issue = make_issue("I_11", "11");
+
+    let runner = ClaudeRunner;
+    let (tx, mut rx) = mpsc::unbounded_channel::<(String, AgentUpdate)>();
+    let cancel = CancellationToken::new();
+
+    // Run with attempt=2 - the prompt should contain "continuation attempt"
+    let result = runner.run(&issue, Some(2), &config, tx, cancel).await;
+
+    // The mock succeeds only if prompt contains "continuation attempt"
+    assert!(
+        result.is_ok(),
+        "Run with attempt should succeed (prompt should contain attempt); got: {:?}",
+        result
+    );
+
+    let mut updates = Vec::new();
+    while let Ok((_, upd)) = rx.try_recv() {
+        updates.push(upd);
+    }
+    assert!(updates.iter().any(|u| matches!(u, AgentUpdate::TurnComplete { .. })));
+}
+
+/// Verify that verify_attempt.sh fails when attempt is None (no continuation message).
+#[tokio::test]
+async fn run_without_attempt_fails_verify_attempt_mock() {
+    let config = make_config("verify_attempt.sh");
+    let issue = make_issue("I_12", "12");
+
+    let runner = ClaudeRunner;
+    let (tx, _rx) = mpsc::unbounded_channel::<(String, AgentUpdate)>();
+    let cancel = CancellationToken::new();
+
+    // Run with attempt=None - the prompt should NOT contain "continuation attempt"
+    // The verify_attempt.sh mock should fail
+    let result = runner.run(&issue, None, &config, tx, cancel).await;
+
+    // The mock should fail because prompt doesn't contain "continuation attempt"
+    assert!(
+        result.is_err(),
+        "Run without attempt should fail with verify_attempt.sh; got: {:?}",
+        result
+    );
 }
