@@ -64,6 +64,21 @@ pub struct RunningEntrySnapshot {
     pub seconds_running: f64,
 }
 
+impl Default for RuntimeSnapshot {
+    fn default() -> Self {
+        Self {
+            generated_at: Utc::now(),
+            running_count: 0,
+            retrying_count: 0,
+            completed_count: 0,
+            running: vec![],
+            retrying: vec![],
+            agent_totals: TokenTotals::new(),
+            rate_limits: None,
+        }
+    }
+}
+
 /// Rate limit information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RateLimitInfo {

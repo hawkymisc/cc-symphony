@@ -12,6 +12,7 @@ pub mod workspace;
 pub mod agent;
 pub mod orchestrator;
 pub mod observability;
+pub mod http_server;
 
 pub use domain::Issue;
 pub use workflow::{load_workflow, LoadedWorkflow, WorkflowError};

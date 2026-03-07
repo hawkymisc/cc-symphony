@@ -147,7 +147,28 @@ async fn main() {
     });
 
     // Build and run orchestrator
-    let (orchestrator, _tx) = Orchestrator::new(tracker, agent_runner, config);
+    let (orchestrator, tx) = Orchestrator::new(tracker, agent_runner, config);
+
+    // Start optional HTTP server
+    #[cfg(feature = "http-server")]
+    if let Some(port) = args.port {
+        let tx_http = tx.clone();
+        let cancel_http = cancel.clone();
+        let listener = match tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await {
+            Ok(l) => l,
+            Err(e) => {
+                error!("Failed to bind HTTP server on port {}: {}", port, e);
+                std::process::exit(exit_codes::CONFIG_ERROR);
+            }
+        };
+        info!("HTTP server listening on port {}", port);
+        tokio::spawn(async move {
+            if let Err(e) = symphony::http_server::start_server(listener, tx_http, cancel_http).await {
+                tracing::warn!("HTTP server error: {}", e);
+            }
+        });
+    }
+
     orchestrator.run(cancel).await;
 
     info!("Symphony stopped");
