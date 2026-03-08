@@ -715,6 +715,91 @@ Behaviour and cancel safety are unchanged; all 145 tests continue to pass.
 - [ ] Consider further deduplication of the full `tokio::select! { biased; cancel => ... }`
       wrapper via a macro or helper if a fifth call site appears.
 
+### Phase 10: GitHub Projects V2 Tracker Adapter 🔲
+
+<!-- CODEX_REVIEWED -->
+> **Status**: Specification complete (SPEC_GITHUB.md §19). Not yet implemented.
+
+**Goal**: Add `tracker.kind: github-project` so that Symphony can treat a GitHub
+Project's custom Status field as the source of truth for issue eligibility, rather
+than the issue's own `OPEN`/`CLOSED` state.
+
+**Why this matters**: Teams that organise work in GitHub Projects often use the
+Status field ("Todo", "In Progress", "Done") rather than closing issues to mark
+completion. The existing `github` adapter cannot represent this workflow.
+
+#### 10.1 Prerequisites
+
+- Familiarity with SPEC_GITHUB.md §19 (read it first).
+- GitHub PAT with `read:project` and `repo` scopes.
+- A test GitHub Project (v2) with at least one issue in an active status.
+
+#### 10.2 Implementation Tasks (TDD order)
+
+| ID | Task | Notes |
+|---|---|---|
+| P10-001 | `ProjectTrackerConfig` struct | Extend `AppConfig` with `owner`, `owner_type`, `project_number`, `status_field_name`, `active_statuses`, `terminal_statuses`, `on_completion_set_status` |
+| P10-002 | `ProjectMeta` cache struct | `project_node_id`, `status_field_id`, `status_options: HashMap<String, String>` |
+| P10-003 | Field discovery query | `organization(login).projectV2(number).fields` → populate `ProjectMeta` |
+| P10-004 | Item poll query | Paginated `node(id).items` with `fieldValueByName(name: "Status")` and `content { ... on Issue }` |
+| P10-005 | Client-side filter | Filter items: Issue OPEN + status in active_statuses + optional label filter |
+| P10-006 | Issue model mapping | Map ProjectV2 item to `Issue`; store `project_item_id` side-map |
+| P10-007 | `fetch_issues_by_ids` reconciliation | Paginate all items, filter by issue node ID client-side |
+| P10-008 | `GitHubProjectTracker` implements `Tracker` trait | Wire P10-003 through P10-007 |
+| P10-009 | `on_completion_set_status` mutation | `updateProjectV2ItemFieldValue` after successful agent run (optional config) |
+| P10-010 | Rate limit guard | Check `X-RateLimit-Remaining`; skip poll cycle if below threshold |
+| P10-011 | Wiremock integration tests | Field discovery, poll (single page + pagination), reconciliation, rate limit backoff |
+| P10-012 | CLI `--dry-run` output | Print `project_number`, `active_statuses`, `terminal_statuses` |
+| P10-013 | `tracker.kind` dispatch | Config validation routes to `GitHubTracker` or `GitHubProjectTracker` |
+| P10-014 | WORKFLOW.md example | Document `github-project` config in README |
+
+#### 10.3 Key Design Decisions
+
+**Dual `id` problem**: A ProjectV2Item has its own node ID (`ProjectV2Item.id`),
+separate from the underlying `Issue.id`. Symphony's `Issue.id` must be the **issue
+node ID** (used for agent workspace naming and reconciliation). The `project_item_id`
+must be stored separately for status-update mutations.
+
+```rust
+// Side-map stored in GitHubProjectTracker (not in Issue model)
+item_id_map: RwLock<HashMap<String, String>>,  // issue_node_id → project_item_id
+```
+
+**No server-side filter**: All items are fetched and filtered client-side. For large
+projects this is O(n) per poll. The delta-optimisation in P10-010 (skip items whose
+`updatedAt` did not change) brings amortised cost down significantly.
+
+**`is_active()` semantics**: The `github-project` adapter synthesises the `Issue.state`
+field from the project Status — it is `OPEN` only when Status is in `active_statuses`.
+This keeps the orchestrator's `issue.is_active()` call unchanged.
+
+#### 10.4 Test Scenarios
+
+```
+project_tracker_discovers_fields            — fields query returns status field + options
+project_tracker_polls_active_items          — items with active status → returned as Issues
+project_tracker_skips_terminal_items        — items with terminal status → excluded
+project_tracker_skips_closed_issues         — CLOSED issues with active status → excluded
+project_tracker_skips_draft_issues          — DraftIssue content → excluded
+project_tracker_paginates_items             — 150 items → two pages of 100+50
+project_tracker_reconciles_by_issue_id      — fetch_issues_by_ids filters by issue node ID
+project_tracker_rate_limit_backoff          — remaining=0 → skip poll, log warning
+project_tracker_status_update_on_completion — updateProjectV2ItemFieldValue called after Ok(())
+project_tracker_unknown_status_excluded     — status not in active/terminal → excluded (warn)
+```
+
+#### 10.5 Open Questions / Risks
+
+- **Large projects**: Projects with > 500 items will hit rate limits at 30s poll.
+  Consider a configurable `max_items_per_poll` to fail-fast during development.
+- **`user` vs `organization` owner type**: The GraphQL query root differs
+  (`organization(login:)` vs `user(login:)`). Needs runtime branching.
+- **Draft issues**: `ProjectV2Item.content` can be a `DraftIssue`, which has no
+  `id` node ID. Must be skipped explicitly.
+- **Project not shared with repo**: A Project can contain issues from multiple
+  repos. The `repo` config field is still needed for posting comments / workspace
+  paths but may not match all project items.
+
 ## Risk Mitigation (Revised)
 
 | Risk | Impact | Mitigation |

@@ -1688,7 +1688,269 @@ network access, or external service permissions are unavailable.
 - Optional `github_graphql` client-side tool extension (future; equivalent of original
   `linear_graphql`). [GitHub]
 - GitHub Projects v2 tracker adapter (`tracker.kind: github-project`). [GitHub]
+  See Section 19 for the full specification.
 - Priority derivation from GitHub labels. [GitHub]
 - Blocker derivation from GitHub task lists / tracked-by references. [GitHub]
 - TODO: Persist retry queue and session metadata across process restarts.
 - TODO: Add pluggable issue tracker adapters beyond GitHub.
+
+---
+
+## Section 19: GitHub Projects V2 Tracker Adapter [GitHub]
+
+> **Status**: Specification only. Not yet implemented.
+> Reference implementation target: Rust crate `symphony`, tracker kind `github-project`.
+
+### 19.1 Motivation
+
+The existing `github` tracker kind polls plain GitHub Issues filtered by label and
+state. This covers simple workflows, but many teams organize work in GitHub Projects
+(v2), which adds:
+
+- A custom **Status field** (single-select) that is independent of the issue's
+  `OPEN`/`CLOSED` state. For example, an issue can remain OPEN but have Status
+  "Done" (waiting for merge review) or Status "Blocked".
+- Custom fields (priority, iteration, estimate) that are project-specific.
+- A project board view that acts as the team's canonical source of workflow truth.
+
+The `github-project` adapter uses the **ProjectV2 GraphQL API** to treat the
+project's Status field as the authoritative source for active/terminal states,
+rather than the issue's own state.
+
+### 19.2 Configuration
+
+```yaml
+tracker:
+  kind: github-project       # New tracker kind
+  owner: myorg               # GitHub org or user login (required)
+  owner_type: organization   # "organization" | "user" (default: organization)
+  project_number: 42         # Project number from URL (required)
+  repo: myorg/myrepo         # Still required: used to post comments, fetch issue body
+  api_key: ${GITHUB_TOKEN}   # PAT with scopes: read:project, repo
+
+  # Status field name in the project (default: "Status")
+  status_field_name: Status
+
+  # Items with these Status values are eligible for dispatch
+  active_statuses:
+    - "In Progress"
+    - "Todo"
+
+  # Items with these Status values are considered terminal (abandon if running)
+  terminal_statuses:
+    - "Done"
+    - "Cancelled"
+
+  # Labels on the underlying issue for additional filtering (optional)
+  # If empty, no label filter is applied
+  labels: []
+```
+
+> **Compatibility note**: `active_states` / `terminal_states` (used by the
+> `github` adapter) become `active_statuses` / `terminal_statuses` for the
+> `github-project` adapter to distinguish project Status values from issue states.
+
+### 19.3 GraphQL API Overview
+
+The adapter makes two categories of GraphQL calls:
+
+#### 19.3.1 Project field discovery (once per startup)
+
+Fetch the project's field definitions to resolve the Status field ID and
+option IDs. This mapping is cached for the lifetime of the process.
+
+```graphql
+query($owner: String!, $number: Int!, $ownerType: String!) {
+  # ownerType branch: organization(...) or user(...)
+  organization(login: $owner) {
+    projectV2(number: $number) {
+      id          # ProjectV2 node ID — used for subsequent item queries
+      fields(first: 50) {
+        nodes {
+          ... on ProjectV2SingleSelectField {
+            id    # STATUS_FIELD_ID
+            name  # e.g. "Status"
+            options {
+              id   # option node ID — required for updateProjectV2ItemFieldValue
+              name # e.g. "In Progress"
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Cache structure (in-memory, never persisted):
+
+```rust
+struct ProjectMeta {
+    project_node_id: String,
+    status_field_id: String,
+    // status option name -> option node ID
+    status_options: HashMap<String, String>,
+}
+```
+
+#### 19.3.2 Polling: fetch active project items
+
+Called on each poll interval. Paginates through all project items and
+filters client-side (the GraphQL API offers no server-side Status filter).
+
+```graphql
+query($projectId: ID!, $after: String) {
+  node(id: $projectId) {
+    ... on ProjectV2 {
+      items(first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id    # ProjectV2Item node ID (used for field updates, NOT the issue ID)
+          status: fieldValueByName(name: "Status") {
+            ... on ProjectV2ItemFieldSingleSelectValue {
+              name    # e.g. "In Progress"
+            }
+          }
+          content {
+            ... on Issue {
+              id          # Issue node ID — used as the Symphony issue.id
+              number      # Issue number
+              title
+              body
+              state       # OPEN | CLOSED (issue's own state)
+              labels(first: 10) {
+                nodes { name }
+              }
+              createdAt
+              updatedAt
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Client-side filtering rules (applied after fetching all pages):
+
+1. `content` must be an `Issue` (skip DraftIssue and PullRequest items).
+2. Issue `state` must be `OPEN` (closed issues are never dispatched).
+3. `status.name` must be in `active_statuses`.
+4. If `labels` config is non-empty, the issue must have at least one matching label.
+
+#### 19.3.3 Reconciliation: fetch status for specific issue IDs
+
+Used when `handle_retry` re-checks a running issue. Fetches the current
+project Status for a set of issue node IDs.
+
+```graphql
+query($projectId: ID!, $after: String) {
+  # Same pagination as §19.3.2 — filter by issue.id client-side
+  # No server-side filter by issue ID is available in the ProjectV2 API
+}
+```
+
+> **Implementation note**: There is no efficient "fetch items by issue ID" API in
+> ProjectV2. The reconciliation query must paginate all items and filter by
+> `content { ... on Issue { id } }`. For large projects this may be slow.
+> A future optimisation is to cache `issue_id → project_item_id` between polls.
+
+### 19.4 Issue Model Mapping
+
+| Symphony `Issue` field | Source |
+|---|---|
+| `id` | Issue node ID (`content { ... on Issue { id } }`) |
+| `identifier` | Issue number as string (`number`) |
+| `title` | `title` |
+| `description` | `body` |
+| `state` | Derived: `OPEN` if status in active_statuses, else `CLOSED` |
+| `labels` | `labels.nodes[].name` |
+| `priority` | Not available from Projects v2 without a custom Priority field |
+| `created_at` | `createdAt` |
+| `updated_at` | `updatedAt` |
+| `project_item_id` | ProjectV2Item node ID (stored separately; used for field updates) |
+
+> The adapter stores `project_item_id → issue_id` in a side-map so that
+> `updateProjectV2ItemFieldValue` can be called without a second lookup.
+
+### 19.5 Normalised `is_active()` Semantics
+
+For the `github-project` adapter, `Issue::is_active()` returns `true` when:
+- Issue `state` is `OPEN`, **and**
+- The project Status name is in `active_statuses`
+
+This overrides the base `github` adapter behaviour where only `state == OPEN` is
+checked.
+
+### 19.6 Status Update on Completion (Optional Extension)
+
+When an agent run completes successfully, the adapter **may** (not required)
+update the project item's Status field to a configured value (e.g. "Done"):
+
+```graphql
+mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+  updateProjectV2ItemFieldValue(
+    input: {
+      projectId: $projectId
+      itemId: $itemId
+      fieldId: $fieldId
+      value: { singleSelectOptionId: $optionId }
+    }
+  ) {
+    projectV2Item { id }
+  }
+}
+```
+
+Config to enable:
+
+```yaml
+tracker:
+  on_completion_set_status: "Done"   # optional; omit to disable
+```
+
+### 19.7 Rate Limit Considerations
+
+| Scenario | Estimated cost |
+|---|---|
+| Field discovery (startup) | ~10–20 points (one-time) |
+| Full project poll, 100 items | ~50–150 points |
+| Full project poll, 1000 items | ~500–1500 points (10 pages) |
+| Reconciliation (same as poll) | Same as poll |
+
+With a 30-second poll interval and 5,000 points/hour limit, a 1000-item project
+consumes roughly 1,500 × 120 = 180,000 points/hour — **exceeding the limit**.
+Implementations MUST:
+
+1. Check `X-RateLimit-Remaining` on each response and back off when below a
+   configurable threshold (default: 500 remaining).
+2. Cache the project item list between polls and perform delta-reconciliation
+   only for items whose `updatedAt` changed (requires storing the last-seen
+   `updatedAt` per item).
+3. Consider increasing `poll_interval_ms` for large projects (recommended
+   minimum: 60,000 ms for projects with > 200 items).
+
+### 19.8 Error Handling
+
+| Error | Handling |
+|---|---|
+| 401 Unauthorized | Fatal startup error — check token scopes (`read:project`, `repo`) |
+| 403 Forbidden on project | Fatal — check project visibility and token access |
+| Project not found (null) | Fatal — check `owner`, `owner_type`, `project_number` |
+| Status field not found | Fatal — check `status_field_name` config |
+| Rate limit (429 / remaining=0) | Exponential backoff; log warning; skip this poll cycle |
+| Pagination error mid-poll | Log warning; use last-known-good item list for this cycle |
+| `updateProjectV2ItemFieldValue` fails | Non-fatal; log warning; do not retry agent |
+
+### 19.9 Differences from `github` Adapter
+
+| Aspect | `github` adapter | `github-project` adapter |
+|---|---|---|
+| Active/terminal filter | Issue `state` (OPEN/CLOSED) | Project Status field (custom) |
+| Config key | `active_states`, `terminal_states` | `active_statuses`, `terminal_statuses` |
+| API | GraphQL IssueConnection | GraphQL ProjectV2 items |
+| Server-side filter | Yes (state, labels) | No — client-side only |
+| Reconciliation | Fetch by issue ID | Paginate all items, filter client-side |
+| Status update | Not applicable | Optional `on_completion_set_status` |
+| Rate limit impact | Low (filtered server-side) | Medium-high (all items fetched) |
