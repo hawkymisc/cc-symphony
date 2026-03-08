@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use symphony::agent::{AgentRunner, AgentUpdate, ClaudeRunner};
+use symphony::agent::{AgentRunConfig, AgentRunner, AgentUpdate, ClaudeRunner};
 use symphony::config::AppConfig;
 use symphony::domain::Issue;
 
@@ -18,15 +18,15 @@ fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/claude_mocks")
 }
 
-fn make_config(mock_script: &str) -> AppConfig {
-    let mut config = AppConfig::default();
-    config.claude.command = fixtures_dir().join(mock_script).to_string_lossy().to_string();
+fn make_config(mock_script: &str) -> AgentRunConfig {
+    let mut app_config = AppConfig::default();
+    app_config.claude.command = fixtures_dir().join(mock_script).to_string_lossy().to_string();
     // Workspace root: unique temp dir per test to avoid cross-test contamination
-    config.workspace.root = std::env::temp_dir().join(format!(
+    app_config.workspace.root = std::env::temp_dir().join(format!(
         "symphony_agent_test_{}",
         uuid::Uuid::new_v4()
     ));
-    config
+    app_config.to_agent_run_config()
 }
 
 fn make_issue(id: &str, identifier: &str) -> Issue {
@@ -34,7 +34,7 @@ fn make_issue(id: &str, identifier: &str) -> Issue {
 }
 
 async fn collect_updates(
-    config: AppConfig,
+    config: AgentRunConfig,
     issue: Issue,
 ) -> (Result<(), symphony::agent::AgentError>, Vec<AgentUpdate>) {
     let runner = ClaudeRunner;
@@ -144,10 +144,13 @@ async fn run_nonzero_exit_returns_process_exit_err() {
 /// ClaudeRunner returns Ok when cancelled mid-run and does not emit TurnComplete.
 #[tokio::test]
 async fn run_mid_run_cancellation_returns_ok() {
-    let mut config = make_config("heartbeat.sh");
+    let mut app_config = AppConfig::default();
+    app_config.claude.command = fixtures_dir().join("heartbeat.sh").to_string_lossy().to_string();
+    app_config.workspace.root = std::env::temp_dir().join(format!("symphony_agent_test_{}", uuid::Uuid::new_v4()));
     // Use short timeouts to avoid long waits if cancellation fails
-    config.claude.read_timeout_ms = 200;
-    config.claude.turn_timeout_ms = 1000;
+    app_config.claude.read_timeout_ms = 200;
+    app_config.claude.turn_timeout_ms = 1000;
+    let config = app_config.to_agent_run_config();
 
     let issue = make_issue("I_7", "7");
 
@@ -195,9 +198,12 @@ async fn run_mid_run_cancellation_returns_ok() {
 /// turn_timeout_ms, the overall-timeout check fires and the child is killed.
 #[tokio::test]
 async fn run_stalled_process_returns_turn_timeout() {
-    let mut config = make_config("stall.sh");
-    config.claude.read_timeout_ms = 100;   // short read window so we loop quickly
-    config.claude.turn_timeout_ms = 400;   // overall timeout fires after ~400 ms
+    let mut app_config = AppConfig::default();
+    app_config.claude.command = fixtures_dir().join("stall.sh").to_string_lossy().to_string();
+    app_config.workspace.root = std::env::temp_dir().join(format!("symphony_agent_test_{}", uuid::Uuid::new_v4()));
+    app_config.claude.read_timeout_ms = 100;   // short read window so we loop quickly
+    app_config.claude.turn_timeout_ms = 400;   // overall timeout fires after ~400 ms
+    let config = app_config.to_agent_run_config();
 
     let (result, _updates) = collect_updates(config, make_issue("I_stall", "99")).await;
 
@@ -212,12 +218,13 @@ async fn run_stalled_process_returns_turn_timeout() {
 /// ClaudeRunner returns ClaudeNotFound when the command does not exist.
 #[tokio::test]
 async fn run_missing_command_returns_claude_not_found() {
-    let mut config = AppConfig::default();
-    config.claude.command = "/nonexistent/path/to/claude".to_string();
-    config.workspace.root = std::env::temp_dir().join(format!(
+    let mut app_config = AppConfig::default();
+    app_config.claude.command = "/nonexistent/path/to/claude".to_string();
+    app_config.workspace.root = std::env::temp_dir().join(format!(
         "symphony_agent_test_{}",
         uuid::Uuid::new_v4()
     ));
+    let config = app_config.to_agent_run_config();
 
     let issue = make_issue("I_8", "8");
     let runner = ClaudeRunner;

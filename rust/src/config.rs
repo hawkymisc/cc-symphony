@@ -277,6 +277,16 @@ impl Default for ClaudeConfig {
 }
 
 impl AppConfig {
+    /// Create an AgentRunConfig from this AppConfig
+    pub fn to_agent_run_config(&self) -> crate::agent::AgentRunConfig {
+        crate::agent::AgentRunConfig {
+            workspace_root: self.workspace.root.clone(),
+            repo: self.tracker.repo.clone().unwrap_or_else(|| "unknown/repo".to_string()),
+            prompt_template: self.prompt_template.clone(),
+            claude: self.claude.clone(),
+        }
+    }
+
     /// Create config from loaded workflow
     pub fn from_workflow(workflow: &LoadedWorkflow) -> Result<Self, ConfigError> {
         // Convert Value to AppConfig with defaults
@@ -626,6 +636,28 @@ mod tests {
         let debug_output = format!("{:?}", config);
         assert!(!debug_output.contains("ghp_super_secret_token_12345"), "API key should be masked in Debug output");
         assert!(debug_output.contains("[REDACTED]"), "Debug output should contain [REDACTED]");
+    }
+
+    #[test]
+    fn app_config_to_agent_run_config() {
+        let mut config = AppConfig::default();
+        config.tracker.repo = Some("owner/repo".to_string());
+        config.prompt_template = "Test prompt".to_string();
+
+        let agent_config = config.to_agent_run_config();
+
+        assert_eq!(agent_config.workspace_root, config.workspace.root);
+        assert_eq!(agent_config.repo, "owner/repo");
+        assert_eq!(agent_config.prompt_template, "Test prompt");
+        assert_eq!(agent_config.claude.command, config.claude.command);
+    }
+
+    #[test]
+    fn app_config_to_agent_run_config_default_repo() {
+        let config = AppConfig::default();
+        // tracker.repo is None by default
+        let agent_config = config.to_agent_run_config();
+        assert_eq!(agent_config.repo, "unknown/repo");
     }
 
     #[test]

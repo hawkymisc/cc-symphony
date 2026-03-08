@@ -10,9 +10,8 @@ use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use serde::Deserialize;
 
-use crate::config::AppConfig;
 use crate::domain::Issue;
-use super::{AgentRunner, AgentError, AgentUpdate};
+use super::{AgentRunner, AgentError, AgentUpdate, AgentRunConfig};
 
 /// Claude Code CLI runner
 pub struct ClaudeRunner;
@@ -49,11 +48,11 @@ impl AgentRunner for ClaudeRunner {
         &self,
         issue: &Issue,
         attempt: Option<u32>,
-        config: &AppConfig,
+        config: &AgentRunConfig,
         update_tx: tokio::sync::mpsc::UnboundedSender<(String, AgentUpdate)>,
         cancel: CancellationToken,
     ) -> Result<(), AgentError> {
-        let workspace_path = config.workspace.root.join(issue.sanitized_identifier());
+        let workspace_path = config.workspace_root.join(issue.sanitized_identifier());
 
         // Prepare workspace
         if !workspace_path.exists() {
@@ -62,7 +61,7 @@ impl AgentRunner for ClaudeRunner {
         }
 
         // Render prompt from the template stored in config (parsed from WORKFLOW.md at startup)
-        let repo = config.tracker.repo.as_deref().unwrap_or("unknown/repo");
+        let repo = config.repo.as_str();
         let template = if config.prompt_template.is_empty() {
             crate::prompt::DEFAULT_PROMPT_TEMPLATE.to_string()
         } else {

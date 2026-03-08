@@ -322,8 +322,9 @@ impl<T: Tracker + 'static, A: AgentRunner + 'static> Orchestrator<T, A> {
                 return;
             }
 
+            let agent_config = config.to_agent_run_config();
             let result = agent_runner
-                .run(&issue_clone, attempt, &config, update_tx, cancel_clone)
+                .run(&issue_clone, attempt, &agent_config, update_tx, cancel_clone)
                 .await;
 
             // Run after_run hook (non-fatal)

@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use tokio::sync::{mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
 
-use symphony::agent::{AgentError, AgentRunner, AgentUpdate};
+use symphony::agent::{AgentError, AgentRunConfig, AgentRunner, AgentUpdate};
 use symphony::config::AppConfig;
 use symphony::domain::Issue;
 use symphony::orchestrator::{Orchestrator, OrchestratorMsg};
@@ -43,7 +43,7 @@ impl AgentRunner for SuccessAgent {
         &self,
         issue: &Issue,
         _attempt: Option<u32>,
-        _config: &AppConfig,
+        _config: &AgentRunConfig,
         _update_tx: mpsc::UnboundedSender<(String, AgentUpdate)>,
         _cancel: CancellationToken,
     ) -> Result<(), AgentError> {
@@ -177,7 +177,7 @@ async fn integration_snapshot_shows_running_while_agent_active() {
             &self,
             _issue: &Issue,
             _attempt: Option<u32>,
-            _config: &AppConfig,
+            _config: &AgentRunConfig,
             _update_tx: mpsc::UnboundedSender<(String, AgentUpdate)>,
             cancel: CancellationToken,
         ) -> Result<(), AgentError> {
@@ -274,7 +274,7 @@ impl AgentRunner for FailThenSucceedAgent {
         &self,
         _issue: &Issue,
         _attempt: Option<u32>,
-        _config: &AppConfig,
+        _config: &AgentRunConfig,
         _update_tx: mpsc::UnboundedSender<(String, AgentUpdate)>,
         _cancel: CancellationToken,
     ) -> Result<(), AgentError> {

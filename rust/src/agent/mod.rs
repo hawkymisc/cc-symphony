@@ -4,11 +4,27 @@ mod claude;
 
 pub use claude::ClaudeRunner;
 
+use std::path::PathBuf;
+
 use async_trait::async_trait;
 use thiserror::Error;
 
-use crate::config::AppConfig;
+use crate::config::ClaudeConfig;
 use crate::domain::Issue;
+
+/// Configuration subset needed by AgentRunner implementations.
+/// Extracted from AppConfig to follow the minimum privilege principle.
+#[derive(Debug, Clone)]
+pub struct AgentRunConfig {
+    /// Workspace root directory
+    pub workspace_root: PathBuf,
+    /// Repository identifier (e.g., "owner/repo")
+    pub repo: String,
+    /// Prompt template (from WORKFLOW.md)
+    pub prompt_template: String,
+    /// Claude CLI configuration
+    pub claude: ClaudeConfig,
+}
 
 /// Errors that can occur during agent operations
 #[derive(Debug, Error)]
@@ -76,7 +92,7 @@ pub trait AgentRunner: Send + Sync {
         &self,
         issue: &Issue,
         attempt: Option<u32>,
-        config: &AppConfig,
+        config: &AgentRunConfig,
         update_tx: tokio::sync::mpsc::UnboundedSender<(String, AgentUpdate)>,
         cancel: tokio_util::sync::CancellationToken,
     ) -> Result<(), AgentError>;

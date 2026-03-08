@@ -8,7 +8,7 @@ use tokio::sync::{mpsc, Mutex};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
-use symphony::agent::{AgentError, AgentRunner, AgentUpdate};
+use symphony::agent::{AgentError, AgentRunConfig, AgentRunner, AgentUpdate};
 use symphony::config::AppConfig;
 use symphony::domain::Issue;
 use symphony::orchestrator::{Orchestrator, OrchestratorMsg};
@@ -57,7 +57,7 @@ impl AgentRunner for MockAgentRunner {
         &self,
         issue: &Issue,
         _attempt: Option<u32>,
-        _config: &AppConfig,
+        _config: &AgentRunConfig,
         _update_tx: mpsc::UnboundedSender<(String, AgentUpdate)>,
         cancel: CancellationToken,
     ) -> Result<(), AgentError> {
@@ -420,7 +420,7 @@ impl AgentRunner for TokenReportingAgent {
         &self,
         issue: &Issue,
         _attempt: Option<u32>,
-        _config: &AppConfig,
+        _config: &AgentRunConfig,
         update_tx: mpsc::UnboundedSender<(String, AgentUpdate)>,
         cancel: CancellationToken,
     ) -> Result<(), AgentError> {
@@ -716,7 +716,7 @@ impl AgentRunner for FastForOneAgent {
         &self,
         issue: &Issue,
         _attempt: Option<u32>,
-        _config: &AppConfig,
+        _config: &AgentRunConfig,
         _update_tx: mpsc::UnboundedSender<(String, AgentUpdate)>,
         cancel: CancellationToken,
     ) -> Result<(), AgentError> {
