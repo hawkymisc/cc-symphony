@@ -421,9 +421,13 @@ impl<T: Tracker + 'static, A: AgentRunner + 'static> Orchestrator<T, A> {
     }
 
     async fn handle_retry(&self, state: &mut OrchestratorState, issue_id: String) {
-        // Remove from retry queue and capture prior failure count before dispatch
+        // Remove from retry queue and capture metadata before dispatch
         if let Some(removed_entry) = state.retry_attempts.remove(&issue_id) {
             let prior_failures = if removed_entry.error.is_some() { removed_entry.attempt } else { 0 };
+            // Preserve original attempt count and metadata for potential re-queue
+            let entry_attempt = removed_entry.attempt;
+            let entry_identifier = removed_entry.identifier.clone();
+            let entry_error = removed_entry.error.clone();
             let workspace_path = removed_entry.workspace_path.clone();
 
             // Re-fetch issue and dispatch if still active
@@ -435,9 +439,23 @@ impl<T: Tracker + 'static, A: AgentRunner + 'static> Orchestrator<T, A> {
                                 self.dispatch_issue(state, issue, prior_failures).await;
                             } else {
                                 // Issue is still open but no slots available right now.
-                                // Release claim so the next poll tick can re-dispatch it.
-                                // Do NOT clean up the workspace — it must be preserved for the next run.
-                                state.claimed.remove(&issue_id);
+                                // Re-queue with a short delay so we try again when slots free up.
+                                // Preserve workspace_path and failure count — do NOT release claim.
+                                let tx = self.tx.clone();
+                                let id = issue_id.clone();
+                                const SLOT_WAIT_MS: u64 = 1_000;
+                                let timer_handle = tokio::spawn(async move {
+                                    tokio::time::sleep(Duration::from_millis(SLOT_WAIT_MS)).await;
+                                    let _ = tx.send(OrchestratorMsg::RetryIssue { issue_id: id });
+                                });
+                                state.retry_attempts.insert(issue_id.clone(), RetryEntry {
+                                    attempt: entry_attempt,
+                                    due_at: std::time::Instant::now() + Duration::from_millis(SLOT_WAIT_MS),
+                                    timer_handle,
+                                    identifier: entry_identifier,
+                                    error: entry_error,
+                                    workspace_path,
+                                });
                             }
                         }
                         _ => {
