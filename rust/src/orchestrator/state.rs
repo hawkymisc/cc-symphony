@@ -91,8 +91,8 @@ pub struct OrchestratorState {
     pub claimed: HashSet<String>,
     /// Retry queue
     pub retry_attempts: HashMap<String, RetryEntry>,
-    /// Completed issue IDs
-    pub completed: HashSet<String>,
+    /// Count of successfully completed agent runs (monotonically increasing)
+    pub completed_count: u64,
     /// Aggregate token totals
     pub agent_totals: crate::domain::TokenTotals,
     /// Rate limit info (if any)
@@ -108,7 +108,7 @@ impl OrchestratorState {
             running: HashMap::new(),
             claimed: HashSet::new(),
             retry_attempts: HashMap::new(),
-            completed: HashSet::new(),
+            completed_count: 0,
             agent_totals: crate::domain::TokenTotals::new(),
             rate_limits: None,
         }
@@ -153,7 +153,7 @@ impl OrchestratorState {
             generated_at: Utc::now(),
             running_count: running.len(),
             retrying_count: retrying.len(),
-            completed_count: self.completed.len(),
+            completed_count: self.completed_count as usize,
             running,
             retrying,
             agent_totals,
@@ -188,5 +188,20 @@ mod tests {
         assert_eq!(snapshot.running_count, 0);
         assert_eq!(snapshot.retrying_count, 0);
         assert!(snapshot.running.is_empty());
+    }
+
+    #[test]
+    fn completed_count_is_u64_not_hashset() {
+        let config = AppConfig::default();
+        let mut state = OrchestratorState::new(&config);
+
+        assert_eq!(state.completed_count, 0);
+        state.completed_count += 1;
+        assert_eq!(state.completed_count, 1);
+        state.completed_count += 1;
+        assert_eq!(state.completed_count, 2);
+
+        let snapshot = state.to_snapshot();
+        assert_eq!(snapshot.completed_count, 2);
     }
 }
