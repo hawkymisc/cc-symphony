@@ -176,6 +176,7 @@ Prompt template here. Available variables:
 | HTTP dashboard | Feature-gated (`--features http-server`); `GET /`, `GET /api/status`, `POST /api/refresh` |
 | Structured logging | `tracing` (human-readable by default); issue_id + identifier in every span |
 | Token aggregation | Input / output tokens tracked across all sessions |
+| Completed issue count | `OrchestratorState.completed` (HashSet) populated on each successful agent turn; `completed_count` exposed in snapshot and dashboard |
 
 ### 🔲 Not Yet Implemented
 
@@ -190,7 +191,6 @@ Prompt template here. Available variables:
 | Rate limit auto-pause | GitHub rate limit headers are tracked but don't auto-pause polling |
 | Workspace cleanup (`before_remove` hook) | `cleanup_workspace` is not called from the orchestrator; before_remove hook never fires |
 | Cache token aggregation | Claude CLI reports cache tokens but they are not forwarded to the runtime aggregator |
-| Completed issue count | `OrchestratorState.completed` is never populated; `completed_count` in snapshots/dashboard is always 0 |
 | Priority-based dispatch | GitHub Issues have no native priority field; dispatch always falls back to oldest-first (created_at) |
 
 ---

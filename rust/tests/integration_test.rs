@@ -134,7 +134,7 @@ async fn integration_completed_count_increments_on_success() {
     let cancel_clone = cancel.clone();
     tokio::spawn(async move { orchestrator.run(cancel_clone).await });
 
-    // Poll until completed_count >= 1
+    // Poll until completed_count == 1
     wait_until(Duration::from_secs(5), "completed_count did not reach 1 within 5 s", || {
         let tx = tx.clone();
         async move {
@@ -143,14 +143,14 @@ async fn integration_completed_count_increments_on_success() {
                 return false;
             }
             match tokio::time::timeout(Duration::from_millis(100), reply_rx).await {
-                Ok(Ok(snap)) => snap.completed_count >= 1,
+                Ok(Ok(snap)) => snap.completed_count == 1,
                 _ => false,
             }
         }
     })
     .await;
 
-    // Take a final snapshot and assert
+    // Take a final snapshot and assert exact count (completed is a HashSet so no duplicates)
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     tx.send(OrchestratorMsg::SnapshotRequest { reply: reply_tx }).unwrap();
     let snap = tokio::time::timeout(Duration::from_secs(1), reply_rx)
@@ -158,7 +158,7 @@ async fn integration_completed_count_increments_on_success() {
         .expect("timed out")
         .expect("channel closed");
 
-    assert!(snap.completed_count >= 1, "completed_count should be >= 1 after success");
+    assert_eq!(snap.completed_count, 1, "exactly one issue should be completed");
 
     cancel.cancel();
 }
