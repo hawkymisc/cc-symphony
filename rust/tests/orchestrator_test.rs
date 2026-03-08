@@ -835,3 +835,134 @@ async fn snapshot_returns_valid_data() {
 
     cancel.cancel();
 }
+
+// ─── consecutive tracker failure backoff tests ────────────────────────────────
+
+/// Tracker that always fails on fetch_candidate_issues.
+struct AlwaysFailTracker;
+
+#[async_trait::async_trait]
+impl Tracker for AlwaysFailTracker {
+    async fn fetch_candidate_issues(&self) -> Result<Vec<Issue>, TrackerError> {
+        Err(TrackerError::ApiRequest("simulated outage".to_string()))
+    }
+
+    async fn fetch_issues_by_ids(&self, _ids: &[String]) -> Result<Vec<Issue>, TrackerError> {
+        Ok(vec![])
+    }
+
+    async fn fetch_issues_by_states(&self, _states: &[String]) -> Result<Vec<Issue>, TrackerError> {
+        Ok(vec![])
+    }
+}
+
+/// Tracker that fails N times then succeeds. Thread-safe via Arc<Mutex<>>.
+struct FailThenSucceedTracker {
+    failures_remaining: Arc<Mutex<u32>>,
+    inner: MemoryTracker,
+}
+
+impl FailThenSucceedTracker {
+    fn new(fail_count: u32, issues: Vec<Issue>) -> Self {
+        Self {
+            failures_remaining: Arc::new(Mutex::new(fail_count)),
+            inner: MemoryTracker::with_issues(issues),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl Tracker for FailThenSucceedTracker {
+    async fn fetch_candidate_issues(&self) -> Result<Vec<Issue>, TrackerError> {
+        let mut remaining = self.failures_remaining.lock().await;
+        if *remaining > 0 {
+            *remaining -= 1;
+            Err(TrackerError::ApiRequest("transient failure".to_string()))
+        } else {
+            drop(remaining);
+            self.inner.fetch_candidate_issues().await
+        }
+    }
+
+    async fn fetch_issues_by_ids(&self, ids: &[String]) -> Result<Vec<Issue>, TrackerError> {
+        self.inner.fetch_issues_by_ids(ids).await
+    }
+
+    async fn fetch_issues_by_states(&self, states: &[String]) -> Result<Vec<Issue>, TrackerError> {
+        self.inner.fetch_issues_by_states(states).await
+    }
+}
+
+/// After tracker errors, no issues should be dispatched since the tracker
+/// never returns candidates.
+#[tokio::test]
+async fn test_tracker_failure_increments_consecutive_failures() {
+    let tracker = AlwaysFailTracker;
+    let agent = MockAgentRunner::success();
+    let dispatched = Arc::clone(&agent.dispatched);
+
+    let mut config = make_config(5);
+    config.polling.interval_ms = 50;
+
+    let (orchestrator, tx) = Orchestrator::new(tracker, agent, config);
+    let cancel = CancellationToken::new();
+    let cancel_clone = cancel.clone();
+
+    tokio::spawn(async move {
+        orchestrator.run(cancel_clone).await;
+    });
+
+    // Let a few ticks fire (each will fail and back off)
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // No issues should have been dispatched since tracker always fails
+    let ids = dispatched.lock().await;
+    assert!(ids.is_empty(), "No issues should be dispatched when tracker always fails");
+
+    // Snapshot should show 0 running, 0 retrying
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    let _ = tx.send(OrchestratorMsg::SnapshotRequest { reply: reply_tx });
+    let snap = timeout(Duration::from_millis(200), reply_rx).await.unwrap().unwrap();
+    assert_eq!(snap.running_count, 0);
+    assert_eq!(snap.retrying_count, 0);
+
+    cancel.cancel();
+}
+
+/// After tracker failures followed by success, issues are dispatched normally,
+/// proving the failure count resets and the orchestrator recovers.
+#[tokio::test]
+async fn test_tracker_success_resets_consecutive_failures() {
+    // Fail 2 times, then succeed
+    let tracker = FailThenSucceedTracker::new(2, vec![make_open_issue("I_1", "1")]);
+    let agent = MockAgentRunner::success();
+    let dispatched = Arc::clone(&agent.dispatched);
+
+    let mut config = make_config(5);
+    config.polling.interval_ms = 50;
+
+    let (orchestrator, _tx) = Orchestrator::new(tracker, agent, config);
+    let cancel = CancellationToken::new();
+    let cancel_clone = cancel.clone();
+
+    tokio::spawn(async move {
+        orchestrator.run(cancel_clone).await;
+    });
+
+    // Wait long enough for the 2 failures + backoff + successful tick + dispatch
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let ids = dispatched.lock().await;
+        if ids.contains(&"I_1".to_string()) {
+            break;
+        }
+        drop(ids);
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "Timed out waiting for issue to be dispatched after tracker recovery"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    cancel.cancel();
+}

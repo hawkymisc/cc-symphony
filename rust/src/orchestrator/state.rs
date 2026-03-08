@@ -97,6 +97,8 @@ pub struct OrchestratorState {
     pub agent_totals: crate::domain::TokenTotals,
     /// Rate limit info (if any)
     pub rate_limits: Option<RateLimitInfo>,
+    /// Consecutive tracker poll failures (reset on success)
+    pub consecutive_tracker_failures: u32,
 }
 
 impl OrchestratorState {
@@ -111,6 +113,7 @@ impl OrchestratorState {
             completed_count: 0,
             agent_totals: crate::domain::TokenTotals::new(),
             rate_limits: None,
+            consecutive_tracker_failures: 0,
         }
     }
 
@@ -188,6 +191,13 @@ mod tests {
         assert_eq!(snapshot.running_count, 0);
         assert_eq!(snapshot.retrying_count, 0);
         assert!(snapshot.running.is_empty());
+    }
+
+    #[test]
+    fn consecutive_tracker_failures_initialized_to_zero() {
+        let config = AppConfig::default();
+        let state = OrchestratorState::new(&config);
+        assert_eq!(state.consecutive_tracker_failures, 0);
     }
 
     #[test]
