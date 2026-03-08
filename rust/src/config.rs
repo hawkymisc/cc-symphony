@@ -185,6 +185,8 @@ pub struct AgentConfig {
     pub max_retry_backoff_ms: u64,
     #[serde(default)]
     pub max_concurrent_agents_by_state: HashMap<String, usize>,
+    #[serde(default = "default_max_retry_queue_size")]
+    pub max_retry_queue_size: usize,
 }
 
 fn default_max_concurrent_agents() -> usize {
@@ -199,6 +201,10 @@ fn default_max_retry_backoff_ms() -> u64 {
     300000 // 5 minutes
 }
 
+fn default_max_retry_queue_size() -> usize {
+    1000
+}
+
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
@@ -206,6 +212,7 @@ impl Default for AgentConfig {
             max_turns: default_max_turns(),
             max_retry_backoff_ms: default_max_retry_backoff_ms(),
             max_concurrent_agents_by_state: HashMap::new(),
+            max_retry_queue_size: default_max_retry_queue_size(),
         }
     }
 }
@@ -398,12 +405,9 @@ fn resolve_env_var(s: &str) -> Result<String, ConfigError> {
             let var_value = std::env::var(var_name).unwrap_or_default();
 
             // Build the new string
-            let before = result[..abs_pos].to_string();
-            let after = result[abs_pos + 1 + var_end..].to_string();
-            result = format!("{}{}{}", before, var_value, after);
-
-            // Update offset to after the replacement
-            offset = before.len() + var_value.len();
+            let new_result = format!("{}{}{}", &result[..abs_pos], var_value, &result[abs_pos + 1 + var_end..]);
+            offset = abs_pos + var_value.len();
+            result = new_result;
         } else {
             break;
         }

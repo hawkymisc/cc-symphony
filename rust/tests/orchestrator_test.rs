@@ -618,7 +618,7 @@ async fn cleanup_workspace_called_when_issue_closed_on_retry() {
     config.workspace.root = workspace_root.clone();
     config.hooks.before_remove = Some(format!("touch {}", flag_file.display()));
 
-    let (orchestrator, tx) = Orchestrator::new(tracker, agent, config);
+    let (orchestrator, _tx) = Orchestrator::new(tracker, agent, config);
     let cancel = CancellationToken::new();
     let cancel_clone = cancel.clone();
 
@@ -682,7 +682,7 @@ async fn cleanup_workspace_called_when_issue_not_found_on_retry() {
     config.workspace.root = workspace_root.clone();
     config.hooks.before_remove = Some(format!("touch {}", flag_file.display()));
 
-    let (orchestrator, tx) = Orchestrator::new(tracker, agent, config);
+    let (orchestrator, _tx) = Orchestrator::new(tracker, agent, config);
     let cancel = CancellationToken::new();
     let cancel_clone = cancel.clone();
 

@@ -3,15 +3,13 @@
 //!
 //! These tests verify the domain module functions correctly.
 
-use symphony::domain::{Issue, BlockerRef, TokenTotals, TokenUsage, RetryEntry};
+use symphony::domain::{Issue, TokenTotals, TokenUsage};
 use symphony::workflow::load_workflow;
 use symphony::config::AppConfig;
 use symphony::prompt::render_prompt;
 
 use tempfile::NamedTempFile;
 use std::io::Write;
-use std::time::Duration;
-
 fn create_temp_file(contents: &str) -> NamedTempFile {
     let mut file = NamedTempFile::new().unwrap();
     write!(file, "{}", contents).unwrap();

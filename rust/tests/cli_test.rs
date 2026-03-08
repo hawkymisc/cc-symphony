@@ -23,6 +23,7 @@ tracker:
 Test prompt
 "#;
 
+#[allow(deprecated)]
 fn symphony() -> Command {
     Command::cargo_bin("symphony").unwrap()
 }
@@ -199,6 +200,7 @@ fn cli_graceful_shutdown_on_sigterm() {
     let workflow = dir.path().join("WORKFLOW.md");
     std::fs::write(&workflow, &workflow_content).unwrap();
 
+    #[allow(deprecated)]
     let mut child = std::process::Command::new(
         assert_cmd::cargo::cargo_bin("symphony"),
     )

@@ -239,7 +239,12 @@ impl GitHubTracker {
         loop {
             pages += 1;
             if pages > MAX_PAGES {
-                warn!("Reached maximum pages ({}) during fetch", MAX_PAGES);
+                warn!(
+                    "Pagination limit reached: fetched {} issues across {} pages (max {}). Some issues may be omitted. Consider using label filters to reduce result set.",
+                    all_issues.len(),
+                    MAX_PAGES,
+                    MAX_PAGES * DEFAULT_PAGE_SIZE
+                );
                 break;
             }
 
@@ -312,14 +317,12 @@ impl GitHubTracker {
 
     /// Parse owner/repo format
     fn parse_repo(&self) -> Result<(&str, &str), TrackerError> {
-        let parts: Vec<&str> = self.config.repo.split('/').collect();
-        if parts.len() != 2 {
-            return Err(TrackerError::ApiRequest(format!(
+        self.config.repo.split_once('/').ok_or_else(|| {
+            TrackerError::ApiRequest(format!(
                 "Invalid repo format: {}. Expected owner/repo",
                 self.config.repo
-            )));
-        }
-        Ok((parts[0], parts[1]))
+            ))
+        })
     }
 
     /// Normalize GitHub issue to domain Issue

@@ -25,6 +25,9 @@ use crate::agent::{AgentRunner, AgentUpdate};
 use crate::observability::RuntimeSnapshot;
 use crate::workspace::{prepare_workspace, run_before_run_hook, run_after_run_hook, cleanup_workspace};
 
+/// Retry attempt value indicating a successful (normal) exit.
+const NORMAL_EXIT_ATTEMPT: u32 = 0;
+
 /// Messages sent to the orchestrator
 #[derive(Debug)]
 pub enum OrchestratorMsg {
@@ -371,8 +374,9 @@ impl<T: Tracker + 'static, A: AgentRunner + 'static> Orchestrator<T, A> {
                     });
 
                     // attempt = 0: success resets consecutive failure counter
+                    state.evict_oldest_retry_if_full();
                     state.retry_attempts.insert(issue_id.clone(), RetryEntry {
-                        attempt: 0,
+                        attempt: NORMAL_EXIT_ATTEMPT,
                         due_at: std::time::Instant::now() + Duration::from_millis(1_000),
                         timer_handle,
                         identifier: Some(identifier),
@@ -400,6 +404,7 @@ impl<T: Tracker + 'static, A: AgentRunner + 'static> Orchestrator<T, A> {
                         let _ = tx.send(OrchestratorMsg::RetryIssue { issue_id: id });
                     });
 
+                    state.evict_oldest_retry_if_full();
                     state.retry_attempts.insert(issue_id.clone(), RetryEntry {
                         attempt: failure_count,
                         due_at: std::time::Instant::now() + Duration::from_millis(backoff_ms),
