@@ -99,6 +99,8 @@ pub struct OrchestratorState {
     pub rate_limits: Option<RateLimitInfo>,
     /// Consecutive tracker poll failures (reset on success)
     pub consecutive_tracker_failures: u32,
+    /// Instant until which ticks should be skipped (tracker backoff)
+    pub skip_ticks_until: Option<tokio::time::Instant>,
 }
 
 impl OrchestratorState {
@@ -114,6 +116,7 @@ impl OrchestratorState {
             agent_totals: crate::domain::TokenTotals::new(),
             rate_limits: None,
             consecutive_tracker_failures: 0,
+            skip_ticks_until: None,
         }
     }
 

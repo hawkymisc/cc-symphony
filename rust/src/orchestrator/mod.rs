@@ -192,6 +192,14 @@ impl<T: Tracker + 'static, A: AgentRunner + 'static> Orchestrator<T, A> {
     }
 
     async fn handle_tick(&self, state: &mut OrchestratorState) {
+        // Skip tick if in backoff period (non-blocking: other messages still processed)
+        if let Some(until) = state.skip_ticks_until {
+            if tokio::time::Instant::now() < until {
+                return;
+            }
+            state.skip_ticks_until = None;
+        }
+
         // Fetch candidate issues
         match self.tracker.fetch_candidate_issues().await {
             Ok(candidates) => {
@@ -232,7 +240,10 @@ impl<T: Tracker + 'static, A: AgentRunner + 'static> Orchestrator<T, A> {
                     "Failed to fetch candidates: {}. Backing off for {}ms",
                     e, backoff_ms
                 );
-                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                // Set backoff deadline instead of sleeping (non-blocking)
+                state.skip_ticks_until = Some(
+                    tokio::time::Instant::now() + Duration::from_millis(backoff_ms)
+                );
             }
         }
     }
