@@ -398,4 +398,82 @@ mod tests {
         assert!(result.is_ok());
         assert!(!workspace_dir.exists());
     }
+
+    // ─── validate_path_containment security tests ─────────────────────────────
+
+    #[test]
+    fn validate_path_containment_accepts_nested_path() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+        let nested = root.join("workspace").join("issue-42");
+
+        // nested doesn't exist yet — should still be accepted (will be created later)
+        let result = validate_path_containment(root, &nested);
+        assert!(result.is_ok(), "A valid nested path should be accepted: {:?}", result);
+    }
+
+    #[test]
+    fn validate_path_containment_rejects_root_equality() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let result = validate_path_containment(root, root);
+        assert!(
+            matches!(result, Err(WorkspaceError::EqualsRoot)),
+            "Path equal to root should be rejected"
+        );
+    }
+
+    #[test]
+    fn validate_path_containment_rejects_path_outside_root() {
+        let outer = TempDir::new().unwrap();
+        let inner = TempDir::new().unwrap();
+        let root = inner.path();
+
+        // Use a sibling temp dir as the "outside" path
+        let outside = outer.path().join("malicious");
+
+        let result = validate_path_containment(root, &outside);
+        assert!(
+            matches!(result, Err(WorkspaceError::OutsideRoot)),
+            "Path outside root should be rejected, got: {:?}", result
+        );
+    }
+
+    #[test]
+    fn validate_path_containment_rejects_dotdot_traversal() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        // Create a subdirectory so the parent lookup has somewhere to canonicalize
+        let sub = root.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+
+        // root/sub/../../etc resolves to the parent of root — outside root
+        let escape = sub.join("..").join("..").join("etc");
+
+        let result = validate_path_containment(root, &escape);
+        assert!(result.is_err(), "Path traversal via '..' should be rejected, got Ok");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validate_path_containment_rejects_symlink_pointing_outside() {
+        use std::os::unix::fs::symlink;
+
+        let outer = TempDir::new().unwrap();
+        let inner = TempDir::new().unwrap();
+        let root = inner.path();
+
+        // Create a symlink inside root pointing to a directory outside root
+        let link_path = root.join("escape_link");
+        symlink(outer.path(), &link_path).unwrap();
+
+        // canonicalize() resolves the symlink to its target; containment check catches it
+        let result = validate_path_containment(root, &link_path);
+        assert!(
+            result.is_err(),
+            "Symlink pointing outside root should be rejected"
+        );
+    }
 }

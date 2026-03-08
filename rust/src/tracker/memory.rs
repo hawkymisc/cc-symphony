@@ -7,6 +7,7 @@ use crate::domain::Issue;
 use super::{Tracker, TrackerError};
 
 /// In-memory tracker for testing purposes
+#[derive(Clone)]
 pub struct MemoryTracker {
     issues: Arc<RwLock<Vec<Issue>>>,
 }

@@ -349,6 +349,221 @@ async fn retry_preserves_backoff_on_tracker_error() {
 
 // ─── Snapshot request ─────────────────────────────────────────────────────────
 
+// ─── reconcile tests ──────────────────────────────────────────────────────────
+
+/// When an issue is removed from the tracker (closed/cancelled), the orchestrator's
+/// reconcile logic should cancel the running agent and remove it from the running set.
+#[tokio::test]
+async fn reconcile_cancels_running_agent_when_issue_removed() {
+    let tracker = MemoryTracker::with_issues(vec![make_open_issue("I_1", "1")]);
+    // Clone shares the same underlying Arc<RwLock<>> — mutations are visible to orchestrator
+    let tracker_handle = tracker.clone();
+
+    // Slow agent so it keeps running during the test window
+    let agent = MockAgentRunner::slow_success(2000);
+
+    let mut config = make_config(5);
+    config.polling.interval_ms = 50; // poll frequently
+
+    let (orchestrator, tx) = Orchestrator::new(tracker, agent, config);
+    let cancel = CancellationToken::new();
+    let cancel_clone = cancel.clone();
+
+    tokio::spawn(async move {
+        orchestrator.run(cancel_clone).await;
+    });
+
+    // Wait for the issue to be dispatched and confirmed running
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let _ = tx.send(OrchestratorMsg::SnapshotRequest { reply: reply_tx });
+        let snap = timeout(Duration::from_millis(200), reply_rx).await.unwrap().unwrap();
+        if snap.running_count == 1 {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "Timed out waiting for issue to start running");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    // Close the issue in the tracker — it will disappear from fetch_candidate_issues
+    tracker_handle.update_state("I_1", "closed").await;
+
+    // Wait for reconcile to remove it from running
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let _ = tx.send(OrchestratorMsg::SnapshotRequest { reply: reply_tx });
+        let snap = timeout(Duration::from_millis(200), reply_rx).await.unwrap().unwrap();
+        if snap.running_count == 0 {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "Timed out waiting for reconcile to cancel agent");
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+
+    cancel.cancel();
+}
+
+// ─── handle_agent_update tests ────────────────────────────────────────────────
+
+/// Agent runner that sends AgentUpdate events with known token counts, then blocks
+/// until cancelled so the running entry is still visible in the snapshot.
+struct TokenReportingAgent {
+    input_tokens: u64,
+    output_tokens: u64,
+}
+
+#[async_trait::async_trait]
+impl AgentRunner for TokenReportingAgent {
+    async fn run(
+        &self,
+        issue: &Issue,
+        _attempt: Option<u32>,
+        _config: &AppConfig,
+        update_tx: mpsc::UnboundedSender<(String, AgentUpdate)>,
+        cancel: CancellationToken,
+    ) -> Result<(), AgentError> {
+        // Send token event immediately
+        let _ = update_tx.send((
+            issue.id.clone(),
+            AgentUpdate::Event {
+                event_type: "assistant".to_string(),
+                message: Some("test message".to_string()),
+                input_tokens: self.input_tokens,
+                output_tokens: self.output_tokens,
+            },
+        ));
+        // Block until cancelled so the running entry stays visible in snapshots
+        cancel.cancelled().await;
+        Ok(())
+    }
+}
+
+/// Agent updates carrying token counts must be tracked in the running entry
+/// and visible in the RuntimeSnapshot while the agent is still running.
+#[tokio::test]
+async fn agent_update_token_deltas_visible_in_snapshot() {
+    let tracker = MemoryTracker::with_issues(vec![make_open_issue("I_1", "1")]);
+    let agent = TokenReportingAgent { input_tokens: 100, output_tokens: 50 };
+
+    let mut config = make_config(5);
+    config.polling.interval_ms = 50;
+
+    let (orchestrator, tx) = Orchestrator::new(tracker, agent, config);
+    let cancel = CancellationToken::new();
+    let cancel_clone = cancel.clone();
+
+    tokio::spawn(async move {
+        orchestrator.run(cancel_clone).await;
+    });
+
+    // Poll until the running entry shows the expected token counts.
+    // The agent is blocked (not yet finished), so the entry remains in `running`.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    let snapshot = loop {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let _ = tx.send(OrchestratorMsg::SnapshotRequest { reply: reply_tx });
+        let snap = timeout(Duration::from_millis(200), reply_rx).await.unwrap().unwrap();
+
+        if snap.running.first().map(|e| e.input_tokens).unwrap_or(0) >= 100 {
+            break snap;
+        }
+
+        assert!(tokio::time::Instant::now() < deadline, "Timed out waiting for token counts in running entry");
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    };
+
+    let entry = &snapshot.running[0];
+    assert_eq!(entry.input_tokens, 100, "input_tokens in running entry should match the agent's event");
+    assert_eq!(entry.output_tokens, 50, "output_tokens in running entry should match the agent's event");
+    assert_eq!(entry.total_tokens, 150, "total_tokens should be sum of input and output");
+
+    cancel.cancel();
+}
+
+// ─── handle_worker_finished tests ─────────────────────────────────────────────
+
+/// After a successful run, the issue should briefly enter the retry queue
+/// (attempt = 0, no error) while waiting for the 1-second continuation delay.
+#[tokio::test]
+async fn worker_finished_success_enters_retry_queue_briefly() {
+    let tracker = MemoryTracker::with_issues(vec![make_open_issue("I_1", "1")]);
+    let agent = MockAgentRunner::success();
+
+    let mut config = make_config(5);
+    config.polling.interval_ms = 1000; // long poll so retry timer fires before next tick
+
+    let (orchestrator, tx) = Orchestrator::new(tracker, agent, config);
+    let cancel = CancellationToken::new();
+    let cancel_clone = cancel.clone();
+
+    tokio::spawn(async move {
+        orchestrator.run(cancel_clone).await;
+    });
+
+    // Wait for the issue to finish (running → retrying)
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let _ = tx.send(OrchestratorMsg::SnapshotRequest { reply: reply_tx });
+        let snap = timeout(Duration::from_millis(200), reply_rx).await.unwrap().unwrap();
+
+        if snap.retrying_count == 1 {
+            let entry = &snap.retrying[0];
+            assert_eq!(entry.attempt, 0, "Successful run should set attempt=0 in retry entry");
+            assert!(entry.error.is_none(), "Successful run should not carry an error");
+            break;
+        }
+
+        assert!(tokio::time::Instant::now() < deadline, "Timed out waiting for retry entry after success");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    cancel.cancel();
+}
+
+/// After a failed run, the issue should appear in the retry queue with attempt=1
+/// and an error message, and the backoff delay should be non-zero.
+#[tokio::test]
+async fn worker_finished_failure_increments_attempt_count() {
+    let tracker = MemoryTracker::with_issues(vec![make_open_issue("I_1", "1")]);
+    let agent = MockAgentRunner::failure();
+
+    let mut config = make_config(5);
+    config.polling.interval_ms = 50;
+    // Long backoff so the retry doesn't fire during the assertion window
+    config.agent.max_retry_backoff_ms = 10_000;
+
+    let (orchestrator, tx) = Orchestrator::new(tracker, agent, config);
+    let cancel = CancellationToken::new();
+    let cancel_clone = cancel.clone();
+
+    tokio::spawn(async move {
+        orchestrator.run(cancel_clone).await;
+    });
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    let snapshot = loop {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let _ = tx.send(OrchestratorMsg::SnapshotRequest { reply: reply_tx });
+        let snap = timeout(Duration::from_millis(200), reply_rx).await.unwrap().unwrap();
+
+        if snap.retrying_count == 1 && snap.retrying[0].attempt >= 1 {
+            break snap;
+        }
+
+        assert!(tokio::time::Instant::now() < deadline, "Timed out waiting for retry entry after failure");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+
+    let entry = &snapshot.retrying[0];
+    assert_eq!(entry.attempt, 1, "First failure should set attempt=1");
+    assert!(entry.error.is_some(), "Failure retry entry should carry an error message");
+
+    cancel.cancel();
+}
+
 /// Requesting a snapshot from a running orchestrator returns a valid snapshot.
 #[tokio::test]
 async fn snapshot_returns_valid_data() {
