@@ -61,7 +61,7 @@ pub struct AppConfig {
 }
 
 /// Tracker configuration (GitHub Issues)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct TrackerConfig {
     #[serde(default = "default_tracker_kind")]
     pub kind: String,
@@ -91,6 +91,20 @@ fn default_active_states() -> Vec<String> {
 
 fn default_terminal_states() -> Vec<String> {
     vec!["closed".to_string()]
+}
+
+impl std::fmt::Debug for TrackerConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TrackerConfig")
+            .field("kind", &self.kind)
+            .field("endpoint", &self.endpoint)
+            .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
+            .field("repo", &self.repo)
+            .field("labels", &self.labels)
+            .field("active_states", &self.active_states)
+            .field("terminal_states", &self.terminal_states)
+            .finish()
+    }
 }
 
 impl Default for TrackerConfig {
@@ -597,6 +611,17 @@ mod tests {
         let config = AppConfig::from_workflow(&workflow).unwrap();
         let result = config.validate();
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn tracker_config_debug_masks_api_key() {
+        let config = TrackerConfig {
+            api_key: Some("ghp_super_secret_token_12345".to_string()),
+            ..Default::default()
+        };
+        let debug_output = format!("{:?}", config);
+        assert!(!debug_output.contains("ghp_super_secret_token_12345"), "API key should be masked in Debug output");
+        assert!(debug_output.contains("[REDACTED]"), "Debug output should contain [REDACTED]");
     }
 
     #[test]

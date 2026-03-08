@@ -8,7 +8,7 @@ mod retry;
 
 pub use state::{OrchestratorState, RunningEntry};
 pub use dispatch::select_candidates;
-pub use retry::{compute_backoff, ExitType};
+pub use retry::{compute_backoff, compute_tracker_backoff, ExitType};
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -20,7 +20,7 @@ use tracing::{info, warn, info_span, Instrument};
 
 use crate::config::AppConfig;
 use crate::domain::{Issue, RetryEntry};
-use crate::tracker::Tracker;
+use crate::tracker::{Tracker, TrackerError};
 use crate::agent::{AgentRunner, AgentUpdate};
 use crate::observability::RuntimeSnapshot;
 use crate::workspace::{prepare_workspace, run_before_run_hook, run_after_run_hook, cleanup_workspace};
@@ -171,6 +171,8 @@ impl<T: Tracker + 'static, A: AgentRunner + 'static> Orchestrator<T, A> {
                             let _ = reply.send(snapshot);
                         }
                         OrchestratorMsg::RefreshRequest { reply } => {
+                            // Manual refresh clears backoff so the poll actually runs
+                            state.skip_ticks_until = None;
                             // Cancel-safe: handle_tick makes a network call.
                             tokio::select! {
                                 biased;
@@ -192,9 +194,19 @@ impl<T: Tracker + 'static, A: AgentRunner + 'static> Orchestrator<T, A> {
     }
 
     async fn handle_tick(&self, state: &mut OrchestratorState) {
+        // Skip tick if in backoff period (non-blocking: other messages still processed)
+        if let Some(until) = state.skip_ticks_until {
+            if tokio::time::Instant::now() < until {
+                return;
+            }
+            state.skip_ticks_until = None;
+        }
+
         // Fetch candidate issues
         match self.tracker.fetch_candidate_issues().await {
             Ok(candidates) => {
+                state.consecutive_tracker_failures = 0;
+
                 // Select candidates to dispatch
                 let to_dispatch = select_candidates(
                     &candidates,
@@ -213,7 +225,28 @@ impl<T: Tracker + 'static, A: AgentRunner + 'static> Orchestrator<T, A> {
                 self.reconcile(state, &candidates).await;
             }
             Err(e) => {
-                warn!("Failed to fetch candidates: {}", e);
+                state.consecutive_tracker_failures += 1;
+                let backoff_ms = match &e {
+                    TrackerError::RateLimited { retry_after_seconds } => {
+                        *retry_after_seconds * 1000
+                    }
+                    _ => {
+                        compute_tracker_backoff(
+                            state.poll_interval_ms,
+                            state.consecutive_tracker_failures,
+                        )
+                    }
+                };
+                warn!(
+                    consecutive_failures = state.consecutive_tracker_failures,
+                    backoff_ms = backoff_ms,
+                    "Failed to fetch candidates: {}. Backing off for {}ms",
+                    e, backoff_ms
+                );
+                // Set backoff deadline instead of sleeping (non-blocking)
+                state.skip_ticks_until = Some(
+                    tokio::time::Instant::now() + Duration::from_millis(backoff_ms)
+                );
             }
         }
     }

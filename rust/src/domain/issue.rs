@@ -157,6 +157,95 @@ mod tests {
     }
 
     #[test]
+    fn is_blocked_with_multiple_active_blockers() {
+        let mut issue = Issue::new("1", "1", "Test");
+        issue.blocked_by = vec![
+            BlockerRef {
+                identifier: "2".to_string(),
+                is_active: true,
+            },
+            BlockerRef {
+                identifier: "3".to_string(),
+                is_active: true,
+            },
+            BlockerRef {
+                identifier: "4".to_string(),
+                is_active: true,
+            },
+        ];
+        assert!(issue.is_blocked());
+    }
+
+    #[test]
+    fn is_blocked_with_all_inactive_blockers() {
+        let mut issue = Issue::new("1", "1", "Test");
+        issue.blocked_by = vec![
+            BlockerRef {
+                identifier: "2".to_string(),
+                is_active: false,
+            },
+            BlockerRef {
+                identifier: "3".to_string(),
+                is_active: false,
+            },
+            BlockerRef {
+                identifier: "4".to_string(),
+                is_active: false,
+            },
+            BlockerRef {
+                identifier: "5".to_string(),
+                is_active: false,
+            },
+            BlockerRef {
+                identifier: "6".to_string(),
+                is_active: false,
+            },
+        ];
+        assert!(!issue.is_blocked());
+    }
+
+    #[test]
+    fn is_blocked_with_one_active_among_many_inactive() {
+        let mut issue = Issue::new("1", "1", "Test");
+        // 9 inactive + 1 active = blocked
+        let mut blockers: Vec<BlockerRef> = (2..=10)
+            .map(|i| BlockerRef {
+                identifier: i.to_string(),
+                is_active: false,
+            })
+            .collect();
+        blockers.push(BlockerRef {
+            identifier: "11".to_string(),
+            is_active: true,
+        });
+        issue.blocked_by = blockers;
+        assert!(issue.is_blocked());
+    }
+
+    #[test]
+    fn is_blocked_empty_blockers_explicit() {
+        let mut issue = Issue::new("1", "1", "Test");
+        issue.blocked_by = vec![];
+        assert!(!issue.is_blocked());
+    }
+
+    #[test]
+    fn is_blocked_combined_with_terminal_state() {
+        // A closed issue can still have active blockers
+        let mut issue = Issue::new("1", "1", "Test");
+        issue.state = "closed".to_string();
+        issue.blocked_by = vec![BlockerRef {
+            identifier: "2".to_string(),
+            is_active: true,
+        }];
+        // is_blocked checks blockers regardless of state
+        assert!(issue.is_blocked());
+        // but the issue is terminal
+        assert!(issue.is_terminal());
+        assert!(!issue.is_active());
+    }
+
+    #[test]
     fn issue_sanitized_identifier_replaces_unsafe_chars() {
         let issue = Issue::new("1", "ABC-123", "Test");
         assert_eq!(issue.sanitized_identifier(), "ABC-123");

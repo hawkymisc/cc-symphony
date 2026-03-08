@@ -176,6 +176,8 @@ fn rate_limit_tracking() {
         retrying: vec![],
         agent_totals: TokenTotals::new(),
         rate_limits: Some(rate_limits),
+        tracker_failures: 0,
+        tracker_backoff: false,
     };
 
     let rl = snapshot.rate_limits.as_ref().expect("rate_limits should be Some");

@@ -28,7 +28,7 @@ const MAX_PAGES: usize = 10;
 const RATE_LIMIT_WARNING_THRESHOLD: u32 = 100;
 
 /// GitHub tracker configuration
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct GitHubConfig {
     /// API endpoint (default: https://api.github.com/graphql)
     pub endpoint: String,
@@ -42,6 +42,19 @@ pub struct GitHubConfig {
     pub active_states: Vec<String>,
     /// Terminal states
     pub terminal_states: Vec<String>,
+}
+
+impl std::fmt::Debug for GitHubConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GitHubConfig")
+            .field("endpoint", &self.endpoint)
+            .field("api_key", &"[REDACTED]")
+            .field("repo", &self.repo)
+            .field("labels", &self.labels)
+            .field("active_states", &self.active_states)
+            .field("terminal_states", &self.terminal_states)
+            .finish()
+    }
 }
 
 /// GitHub Issues tracker
@@ -418,6 +431,21 @@ mod tests {
         let (owner, repo) = tracker.parse_repo().unwrap();
         assert_eq!(owner, "owner");
         assert_eq!(repo, "repo");
+    }
+
+    #[test]
+    fn github_config_debug_masks_api_key() {
+        let config = GitHubConfig {
+            endpoint: GITHUB_GRAPHQL_ENDPOINT.to_string(),
+            api_key: "ghp_super_secret_token_12345".to_string(),
+            repo: "owner/repo".to_string(),
+            labels: vec![],
+            active_states: vec!["open".to_string()],
+            terminal_states: vec!["closed".to_string()],
+        };
+        let debug_output = format!("{:?}", config);
+        assert!(!debug_output.contains("ghp_super_secret_token_12345"), "API key should be masked in Debug output");
+        assert!(debug_output.contains("[REDACTED]"), "Debug output should contain [REDACTED]");
     }
 
     #[test]
