@@ -33,21 +33,34 @@ The Rust implementation connects **GitHub Issues** with the **Claude Code CLI** 
 
 ### Quick Start
 
-**1. Build**
+**1. Build and install**
 
 ```bash
 cd rust
-cargo build --release
+cargo install --path .
 ```
 
-**2. Create `WORKFLOW.md`**
+Alternatively, run directly from the build output:
+
+```bash
+cargo build --release
+./target/release/symphony --help
+```
+
+**2. Set credentials**
+
+```bash
+export GITHUB_TOKEN=ghp_xxxxxxxxxxxx
+```
+
+**3. Create `WORKFLOW.md`**
 
 ```markdown
 ---
 tracker:
   kind: github
   repo: "owner/your-repo"
-  api_key: "$GITHUB_TOKEN"          # or literal token
+  api_key: "$GITHUB_TOKEN"          # resolves from env at startup
   labels: ["symphony"]              # optional: only pick up issues with this label
 agent:
   max_concurrent_agents: 3
@@ -64,7 +77,7 @@ Issue description:
 Please implement a solution, open a PR, and close the issue when done.
 ```
 
-**3. Validate config (dry run)**
+**4. Validate config (dry run)**
 
 ```bash
 symphony ./WORKFLOW.md --dry-run
@@ -78,10 +91,9 @@ Config validated successfully
   Max concurrent agents: 3
 ```
 
-**4. Run**
+**5. Run**
 
 ```bash
-export GITHUB_TOKEN=ghp_xxxxxxxxxxxx
 symphony ./WORKFLOW.md
 ```
 
@@ -89,7 +101,7 @@ symphony ./WORKFLOW.md
 
 ```bash
 cargo build --release --features http-server
-symphony ./WORKFLOW.md --port 8080
+./target/release/symphony ./WORKFLOW.md --port 8080
 # Open http://127.0.0.1:8080 in browser
 ```
 
@@ -114,7 +126,7 @@ tracker:
   labels: ["symphony"]       # optional: label filter
 
 agent:
-  max_concurrent_agents: 5   # default: 5
+  max_concurrent_agents: 10  # default: 10
   max_retry_backoff_ms: 300000  # default: 5 min
 
 polling:
@@ -130,9 +142,11 @@ workspace:
   root: "~/symphony-workspaces"  # default: $TMPDIR/symphony_workspaces
 
 hooks:
-  after_create: "./scripts/setup.sh"    # runs once when workspace is created
-  before_run:   "./scripts/prepare.sh"  # runs before each agent invocation
-  after_run:    "./scripts/cleanup.sh"  # runs after each agent invocation
+  after_create:  "./scripts/setup.sh"    # runs once when workspace is first created
+  before_run:    "./scripts/prepare.sh"  # runs before each agent invocation (fatal on failure)
+  after_run:     "./scripts/cleanup.sh"  # runs after each agent invocation (non-fatal)
+  before_remove: "./scripts/teardown.sh" # runs before workspace directory is deleted (non-fatal)
+  timeout_ms: 60000                      # default: 60 s; applies to all hooks
 ---
 Prompt template here. Available variables:
 
@@ -154,14 +168,14 @@ Prompt template here. Available variables:
 | GitHub Issues polling | GraphQL v4, pagination, label filtering |
 | Issue dispatch | Priority sort, concurrency limit, claim deduplication |
 | Claude Code CLI integration | Subprocess, streaming JSON events, token tracking |
-| Workspace management | Per-issue directories, hook scripts |
+| Workspace management | Per-issue directories, hook scripts (after_create / before_run / after_run / before_remove) |
 | Retry with exponential backoff | Configurable cap, consecutive failure tracking |
 | Graceful shutdown | SIGTERM / SIGINT → cancel-safe exit |
 | Dry-run mode | `--dry-run` validates config and exits |
-| Observability snapshot | `OrchestratorMsg::SnapshotRequest` returns `RuntimeSnapshot` |
+| Observability snapshot | `RuntimeSnapshot` via internal message channel |
 | HTTP dashboard | Feature-gated (`--features http-server`); `GET /`, `GET /api/status`, `POST /api/refresh` |
-| Structured logging | `tracing` with JSON output; issue_id + identifier in every span |
-| Token aggregation | Input/output/total tokens across all sessions |
+| Structured logging | `tracing` (human-readable by default); issue_id + identifier in every span |
+| Token aggregation | Input / output / cache tokens tracked across all sessions |
 
 ### 🔲 Not Yet Implemented
 
@@ -173,7 +187,7 @@ Prompt template here. Available variables:
 | Real-GitHub CI gate | Integration tests use `MemoryTracker`; no staging smoke test |
 | Config hot-reload | `ConfigReloaded` message exists but doesn't re-parse WORKFLOW.md |
 | Per-state concurrency limits | Global limit only; no per-label / per-project slot control |
-| Rate limit backoff | GitHub rate limit headers are tracked but don't auto-pause polling |
+| Rate limit auto-pause | GitHub rate limit headers are tracked but don't auto-pause polling |
 
 ---
 
