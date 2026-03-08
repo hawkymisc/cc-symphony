@@ -250,6 +250,30 @@ fn state_token_aggregation_via_agent_totals() {
     assert_eq!(snapshot.agent_totals.cache_read_tokens, 20);
 }
 
+/// Cache tokens (creation + read) are aggregated into agent_totals and surfaced in the snapshot.
+#[test]
+fn state_token_aggregation_with_cache_tokens() {
+    let config = AppConfig::default();
+    let mut state = OrchestratorState::new(&config);
+
+    state.agent_totals.add(&TokenUsage {
+        input_tokens: 100,
+        output_tokens: 50,
+        cache_creation_tokens: Some(30),
+        cache_read_tokens: Some(20),
+    });
+    state.agent_totals.add(&TokenUsage {
+        input_tokens: 50,
+        output_tokens: 25,
+        cache_creation_tokens: None,
+        cache_read_tokens: Some(10),
+    });
+
+    let snapshot = state.to_snapshot();
+    assert_eq!(snapshot.agent_totals.cache_creation_tokens, 30);
+    assert_eq!(snapshot.agent_totals.cache_read_tokens, 30); // 20 + 10
+}
+
 /// Rate limit info stored in OrchestratorState is reflected in the snapshot.
 #[test]
 fn state_rate_limit_preserved_in_snapshot() {

@@ -320,3 +320,30 @@ async fn run_without_attempt_fails_verify_attempt_mock() {
         result
     );
 }
+
+// ─── cache token propagation ──────────────────────────────────────────────────
+
+/// ClaudeRunner forwards cache_creation_input_tokens and cache_read_input_tokens
+/// from the `result` event into the AgentUpdate::Event message.
+#[tokio::test]
+async fn run_success_reports_cache_tokens() {
+    let config = make_config("success_with_cache.sh");
+    let issue = make_issue("I_13", "13");
+
+    let (_result, updates) = collect_updates(config, issue).await;
+
+    let token_event = updates.iter().find(|u| {
+        matches!(u, AgentUpdate::Event { input_tokens, .. } if *input_tokens > 0)
+    });
+    assert!(token_event.is_some(), "Expected token Event; got: {:?}", updates);
+
+    if let Some(AgentUpdate::Event {
+        cache_creation_tokens,
+        cache_read_tokens,
+        ..
+    }) = token_event
+    {
+        assert_eq!(*cache_creation_tokens, 30, "cache_creation_tokens should be 30");
+        assert_eq!(*cache_read_tokens, 20, "cache_read_tokens should be 20");
+    }
+}

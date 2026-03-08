@@ -432,6 +432,8 @@ impl AgentRunner for TokenReportingAgent {
                 message: Some("test message".to_string()),
                 input_tokens: self.input_tokens,
                 output_tokens: self.output_tokens,
+                cache_creation_tokens: 0,
+                cache_read_tokens: 0,
             },
         ));
         // Block until cancelled so the running entry stays visible in snapshots

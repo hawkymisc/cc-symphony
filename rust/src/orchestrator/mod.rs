@@ -387,13 +387,13 @@ impl<T: Tracker + 'static, A: AgentRunner + 'static> Orchestrator<T, A> {
             entry.last_event_timestamp = Some(chrono::Utc::now());
 
             match update {
-                AgentUpdate::Event { event_type, message, input_tokens, output_tokens } => {
+                AgentUpdate::Event { event_type, message, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens } => {
                     entry.last_event = Some(event_type);
                     entry.last_event_message = message;
                     entry.input_tokens += input_tokens;
                     entry.output_tokens += output_tokens;
                     entry.total_tokens = entry.input_tokens + entry.output_tokens;
-                    Some((input_tokens, output_tokens))
+                    Some((input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens))
                 }
                 AgentUpdate::Started { session_id } => {
                     entry.session_id = Some(session_id);
@@ -410,12 +410,12 @@ impl<T: Tracker + 'static, A: AgentRunner + 'static> Orchestrator<T, A> {
         };
 
         // Accumulate deltas into aggregate totals (borrow of entry is dropped above)
-        if let Some((input_delta, output_delta)) = token_delta {
+        if let Some((input_delta, output_delta, cache_creation, cache_read)) = token_delta {
             state.agent_totals.add(&crate::domain::TokenUsage {
                 input_tokens: input_delta,
                 output_tokens: output_delta,
-                cache_read_tokens: None,
-                cache_creation_tokens: None,
+                cache_read_tokens: if cache_read > 0 { Some(cache_read) } else { None },
+                cache_creation_tokens: if cache_creation > 0 { Some(cache_creation) } else { None },
             });
         }
     }

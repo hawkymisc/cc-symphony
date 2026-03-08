@@ -49,6 +49,8 @@ pub enum AgentUpdate {
         message: Option<String>,
         input_tokens: u64,
         output_tokens: u64,
+        cache_creation_tokens: u64,
+        cache_read_tokens: u64,
     },
     /// Agent turn completed
     TurnComplete {

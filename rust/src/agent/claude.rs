@@ -38,10 +38,8 @@ struct ClaudeUsage {
     input_tokens: u64,
     output_tokens: u64,
     #[serde(default)]
-    #[allow(dead_code)]
     cache_creation_input_tokens: u64,
     #[serde(default)]
-    #[allow(dead_code)]
     cache_read_input_tokens: u64,
 }
 
@@ -160,6 +158,8 @@ impl AgentRunner for ClaudeRunner {
                                         message: event.result.clone(),
                                         input_tokens: input_delta,
                                         output_tokens: output_delta,
+                                        cache_creation_tokens: usage.cache_creation_input_tokens,
+                                        cache_read_tokens: usage.cache_read_input_tokens,
                                     }));
                                 }
 
@@ -201,6 +201,8 @@ impl AgentRunner for ClaudeRunner {
                                     message: msg,
                                     input_tokens: 0,
                                     output_tokens: 0,
+                                    cache_creation_tokens: 0,
+                                    cache_read_tokens: 0,
                                 }));
                             }
                             _ => {
