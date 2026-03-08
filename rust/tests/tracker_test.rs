@@ -1,6 +1,6 @@
 //! Phase 3: GitHub Tracker tests using wiremock (PLAN.md §Phase 3)
 
-use wiremock::matchers::{body_json_schema, header, method, path};
+use wiremock::matchers::{body_string_contains, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 use serde_json::json;
 
@@ -397,6 +397,148 @@ async fn fetch_states_by_ids_empty_input() {
 
     assert!(issues.is_empty());
     // wiremock will verify 0 requests were made (no expect() registered)
+}
+
+// ─── fetch_issues_by_states ──────────────────────────────────────────────────
+
+/// fetch_issues_by_states returns issues matching the requested state.
+#[tokio::test]
+async fn fetch_issues_by_states_returns_matching_issues() {
+    let server = MockServer::start().await;
+
+    let response = json!({
+        "data": {
+            "repository": {
+                "issues": {
+                    "nodes": [{
+                        "id": "I_closed",
+                        "number": 99,
+                        "title": "Old bug",
+                        "body": null,
+                        "state": "CLOSED",
+                        "labels": {"nodes": []},
+                        "createdAt": "2026-01-01T00:00:00Z",
+                        "updatedAt": "2026-01-05T00:00:00Z",
+                        "url": "https://github.com/owner/repo/issues/99"
+                    }],
+                    "pageInfo": {"hasNextPage": false, "endCursor": null}
+                }
+            }
+        }
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(response))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let tracker = GitHubTracker::new(make_config(&server.uri(), vec![])).unwrap();
+    let issues = tracker.fetch_issues_by_states(&["CLOSED".to_string()]).await.unwrap();
+
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].id, "I_closed");
+    assert_eq!(issues[0].state, "closed"); // normalized to lowercase by normalize_issue
+}
+
+/// fetch_issues_by_states normalizes lowercase state strings to uppercase
+/// before sending to the GitHub GraphQL API (which requires uppercase IssueState enum).
+#[tokio::test]
+async fn fetch_issues_by_states_normalizes_lowercase_to_uppercase() {
+    let server = MockServer::start().await;
+
+    // The mock requires the request body to contain "OPEN" (uppercased).
+    // If normalization is missing, the raw "open" would be sent and the mock would reject it.
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .and(body_string_contains("OPEN"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(single_issue_response()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let tracker = GitHubTracker::new(make_config(&server.uri(), vec![])).unwrap();
+    // Pass lowercase "open" — should be normalized to "OPEN" in the GraphQL query
+    let issues = tracker.fetch_issues_by_states(&["open".to_string()]).await.unwrap();
+
+    // Verify the result: mock's expect(1) ensures the body-contains matcher matched
+    assert_eq!(issues.len(), 1);
+}
+
+/// fetch_issues_by_states with multiple states returns issues from all matched states.
+#[tokio::test]
+async fn fetch_issues_by_states_multiple_states() {
+    let server = MockServer::start().await;
+
+    let response = json!({
+        "data": {
+            "repository": {
+                "issues": {
+                    "nodes": [
+                        {
+                            "id": "I_open",
+                            "number": 1,
+                            "title": "Open issue",
+                            "body": null,
+                            "state": "OPEN",
+                            "labels": {"nodes": []},
+                            "createdAt": "2026-01-01T00:00:00Z",
+                            "updatedAt": "2026-01-01T00:00:00Z",
+                            "url": "https://github.com/owner/repo/issues/1"
+                        },
+                        {
+                            "id": "I_closed",
+                            "number": 2,
+                            "title": "Closed issue",
+                            "body": null,
+                            "state": "CLOSED",
+                            "labels": {"nodes": []},
+                            "createdAt": "2026-01-02T00:00:00Z",
+                            "updatedAt": "2026-01-02T00:00:00Z",
+                            "url": "https://github.com/owner/repo/issues/2"
+                        }
+                    ],
+                    "pageInfo": {"hasNextPage": false, "endCursor": null}
+                }
+            }
+        }
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(response))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let tracker = GitHubTracker::new(make_config(&server.uri(), vec![])).unwrap();
+    let issues = tracker
+        .fetch_issues_by_states(&["OPEN".to_string(), "CLOSED".to_string()])
+        .await
+        .unwrap();
+
+    assert_eq!(issues.len(), 2);
+    let states: Vec<&str> = issues.iter().map(|i| i.state.as_str()).collect();
+    assert!(states.contains(&"open"), "should include open issues");
+    assert!(states.contains(&"closed"), "should include closed issues");
+}
+
+/// fetch_issues_by_states with an empty slice returns Ok([]) without any HTTP request (spec §2).
+#[tokio::test]
+async fn fetch_issues_by_states_empty_slice_no_http_call() {
+    let server = MockServer::start().await;
+    // No mock registered: any HTTP request would return 404, causing a tracker error.
+
+    let tracker = GitHubTracker::new(make_config(&server.uri(), vec![])).unwrap();
+    let issues = tracker.fetch_issues_by_states(&[]).await.unwrap();
+
+    assert!(issues.is_empty(), "empty states slice must return empty vec");
+    // Verify no request was made to the server
+    assert!(
+        server.received_requests().await.unwrap().is_empty(),
+        "no HTTP request should be issued for an empty states slice"
+    );
 }
 
 // ─── fetch_states_partial ────────────────────────────────────────────────────

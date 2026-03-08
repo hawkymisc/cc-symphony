@@ -387,6 +387,9 @@ impl Tracker for GitHubTracker {
     }
 
     async fn fetch_issues_by_states(&self, states: &[String]) -> Result<Vec<Issue>, TrackerError> {
+        if states.is_empty() {
+            return Ok(Vec::new());
+        }
         self.fetch_issues_paginated(states, &self.config.labels).await
     }
 }

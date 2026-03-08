@@ -209,6 +209,108 @@ async fn integration_full_cycle_multiple_issues_dispatched() {
     cancel.cancel();
 }
 
+/// Agent that fails for the first `fail_count` calls then succeeds.
+struct FailThenSucceedAgent {
+    calls: Arc<Mutex<u32>>,
+    fail_count: u32,
+}
+
+impl FailThenSucceedAgent {
+    fn new(fail_count: u32) -> Self {
+        Self {
+            calls: Arc::new(Mutex::new(0)),
+            fail_count,
+        }
+    }
+}
+
+#[async_trait]
+impl AgentRunner for FailThenSucceedAgent {
+    async fn run(
+        &self,
+        _issue: &Issue,
+        _attempt: Option<u32>,
+        _config: &AppConfig,
+        _update_tx: mpsc::UnboundedSender<(String, AgentUpdate)>,
+        _cancel: CancellationToken,
+    ) -> Result<(), AgentError> {
+        let mut calls = self.calls.lock().await;
+        *calls += 1;
+        let call_number = *calls;
+        drop(calls);
+
+        if call_number <= self.fail_count {
+            Err(AgentError::TurnFailed(format!("simulated failure #{}", call_number)))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// Failure→retry→success lifecycle:
+/// 1. Agent fails twice (exponential backoff, capped short)
+/// 2. On the third dispatch, agent succeeds
+/// 3. The issue re-enters the retry queue with attempt=0 (success marker)
+#[tokio::test]
+async fn integration_failure_retry_success_cycle() {
+    let issue = open_issue("GH_RETRY", "55");
+    let tracker = MemoryTracker::with_issues(vec![issue]);
+
+    let agent = FailThenSucceedAgent::new(2); // fail twice, then succeed
+    let calls = Arc::clone(&agent.calls);
+
+    let mut config = test_config();
+    config.agent.max_retry_backoff_ms = 50; // cap backoff at 50 ms so test runs fast
+
+    let (orchestrator, tx) = Orchestrator::new(tracker, agent, config);
+    let cancel = CancellationToken::new();
+    let cancel_clone = cancel.clone();
+    tokio::spawn(async move { orchestrator.run(cancel_clone).await });
+
+    // Wait until the agent has been called at least 3 times (2 failures + 1 success)
+    wait_until(Duration::from_secs(10), "agent was not called 3 times within 10 s", || {
+        let calls = Arc::clone(&calls);
+        async move { *calls.lock().await >= 3 }
+    })
+    .await;
+
+    // After the successful (3rd) run there is a 1-second re-dispatch window during which
+    // the issue sits in the retry queue with attempt=0 and error=None.
+    // Poll snapshots until we see that state (or time out).
+    let final_snap = {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+            tx.send(OrchestratorMsg::SnapshotRequest { reply: reply_tx }).unwrap();
+            let snap = tokio::time::timeout(Duration::from_millis(200), reply_rx)
+                .await
+                .expect("snapshot channel timed out")
+                .expect("channel closed");
+
+            if snap.running_count == 0
+                && snap.retrying.iter().any(|e| e.attempt == 0 && e.error.is_none())
+            {
+                break snap;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!("retry queue with attempt=0 not observed within 5 s; last snap: {:?}", snap);
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+
+    // Agent should not still be running
+    assert_eq!(final_snap.running_count, 0, "issue should not be running after success");
+
+    // The retry entry must reflect the successful run: attempt=0, no error
+    assert_eq!(final_snap.retrying_count, 1, "exactly one retry entry expected");
+    let entry = &final_snap.retrying[0];
+    assert_eq!(entry.attempt, 0, "successful run resets consecutive failure counter to 0");
+    assert!(entry.error.is_none(), "successful run must not carry an error");
+
+    cancel.cancel();
+}
+
 /// Closed issue is never dispatched.
 #[tokio::test]
 async fn integration_closed_issue_never_dispatched() {

@@ -187,6 +187,26 @@ async fn run_mid_run_cancellation_returns_ok() {
     );
 }
 
+// ─── turn timeout ─────────────────────────────────────────────────────────────
+
+/// ClaudeRunner returns TurnTimeout when the process stalls beyond turn_timeout_ms.
+///
+/// Uses stall.sh which emits one line then blocks indefinitely. With a short
+/// turn_timeout_ms, the overall-timeout check fires and the child is killed.
+#[tokio::test]
+async fn run_stalled_process_returns_turn_timeout() {
+    let mut config = make_config("stall.sh");
+    config.claude.read_timeout_ms = 100;   // short read window so we loop quickly
+    config.claude.turn_timeout_ms = 400;   // overall timeout fires after ~400 ms
+
+    let (result, _updates) = collect_updates(config, make_issue("I_stall", "99")).await;
+
+    assert!(
+        matches!(result, Err(symphony::agent::AgentError::TurnTimeout)),
+        "Stalled process should return TurnTimeout; got: {:?}", result
+    );
+}
+
 // ─── command not found ────────────────────────────────────────────────────────
 
 /// ClaudeRunner returns ClaudeNotFound when the command does not exist.
