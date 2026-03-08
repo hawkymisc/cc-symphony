@@ -49,6 +49,7 @@ async-trait = "0.1"
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }  # adds time control (pause/advance)
 tempfile = "3"
+libc = "0.2"  # SIGTERM in cli_graceful_shutdown test
 wiremock = "0.6"
 assert_cmd = "2"
 predicates = "3"

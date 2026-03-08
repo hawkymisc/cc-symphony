@@ -39,7 +39,7 @@ struct Args {
 
 mod exit_codes {
     pub const SUCCESS: i32 = 0;
-    pub const CONFIG_ERROR: i32 = 2;
+    pub const CONFIG_ERROR: i32 = 1;
     pub const WORKFLOW_ERROR: i32 = 3;
 }
 
