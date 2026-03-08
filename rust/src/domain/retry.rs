@@ -1,6 +1,5 @@
 //! Retry queue entry (SPEC §4.1.7)
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::task::JoinHandle;
 use std::path::PathBuf;

@@ -3,7 +3,7 @@
 //! Parses workflow config into typed structs with defaults and validation.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -321,7 +321,7 @@ impl AppConfig {
         }
 
         // Validate api_key is present
-        if self.tracker.api_key.as_ref().map_or(true, |k| k.is_empty()) {
+        if self.tracker.api_key.as_ref().is_none_or(|k| k.is_empty()) {
             return Err(ConfigError::MissingTrackerApiKey);
         }
 

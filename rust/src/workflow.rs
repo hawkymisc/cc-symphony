@@ -3,7 +3,6 @@
 //! Parses YAML front matter followed by a Liquid template body.
 
 use std::path::Path;
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Errors that can occur during workflow loading
@@ -83,7 +82,7 @@ fn parse_front_matter(contents: &str, _path: &str) -> Result<(WorkflowConfig, St
     // Find the end of front matter (closing ---)
     // Look for a line that is just "---" (possibly with whitespace)
     let after_first_dash = &trimmed[3..]; // Skip first ---
-    let remaining = after_first_dash.trim_start_matches(|c| c == '\n' || c == '\r');
+    let remaining = after_first_dash.trim_start_matches(['\n', '\r']);
 
     // Find the closing --- on its own line
     let mut end_marker_pos = None;

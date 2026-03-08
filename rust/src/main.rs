@@ -147,7 +147,10 @@ async fn main() {
     });
 
     // Build and run orchestrator
+    #[cfg(feature = "http-server")]
     let (orchestrator, tx) = Orchestrator::new(tracker, agent_runner, config);
+    #[cfg(not(feature = "http-server"))]
+    let (orchestrator, _tx) = Orchestrator::new(tracker, agent_runner, config);
 
     // Warn when --port is supplied but http-server feature is not compiled in.
     #[cfg(not(feature = "http-server"))]

@@ -29,7 +29,6 @@ mod server {
     use tokio::sync::mpsc;
     use tokio_util::sync::CancellationToken;
 
-    use crate::observability::RuntimeSnapshot;
     use crate::orchestrator::OrchestratorMsg;
 
     /// Timeout for waiting on orchestrator responses (prevents hanging workers).

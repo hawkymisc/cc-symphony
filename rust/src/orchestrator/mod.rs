@@ -431,7 +431,7 @@ impl<T: Tracker + 'static, A: AgentRunner + 'static> Orchestrator<T, A> {
             let workspace_path = removed_entry.workspace_path.clone();
 
             // Re-fetch issue and dispatch if still active
-            match self.tracker.fetch_issues_by_ids(&[issue_id.clone()]).await {
+            match self.tracker.fetch_issues_by_ids(std::slice::from_ref(&issue_id)).await {
                 Ok(issues) => {
                     match issues.into_iter().next() {
                         Some(issue) if issue.is_active() => {

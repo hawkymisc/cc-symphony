@@ -7,14 +7,15 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
 use super::{Tracker, TrackerError};
 use crate::domain::Issue;
 
-/// GitHub GraphQL API endpoint
+/// GitHub GraphQL API endpoint (used in tests and as the default value)
+#[cfg(test)]
 const GITHUB_GRAPHQL_ENDPOINT: &str = "https://api.github.com/graphql";
 
 /// Default page size for GraphQL queries
@@ -53,7 +54,9 @@ pub struct GitHubTracker {
 #[derive(Debug, Clone, Default)]
 struct RateLimitInfo {
     remaining: u32,
+    #[allow(dead_code)]
     limit: u32,
+    #[allow(dead_code)]
     reset_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
@@ -68,6 +71,7 @@ struct GraphQLResponse<T> {
 struct GraphQLError {
     message: String,
     #[serde(default)]
+    #[allow(dead_code)]
     locations: Vec<serde_json::Value>,
 }
 
@@ -342,7 +346,8 @@ impl Tracker for GitHubTracker {
             return Ok(Vec::new());
         }
 
-        let (owner, repo) = self.parse_repo()?;
+        // parse_repo validates the config format even though owner/repo aren't used in this query
+        let _ = self.parse_repo()?;
 
         // GitHub GraphQL doesn't support fetching by node IDs directly for issues
         // We need to use the node query
@@ -379,7 +384,7 @@ impl Tracker for GitHubTracker {
 
         let issues: Vec<Issue> = data.nodes
             .into_iter()
-            .filter_map(|n| n)
+            .flatten()
             .map(|gh| self.normalize_issue(gh))
             .collect();
 

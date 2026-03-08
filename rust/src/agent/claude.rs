@@ -27,6 +27,7 @@ struct ClaudeStreamEvent {
     usage: Option<ClaudeUsage>,
     error: Option<serde_json::Value>,
     tool: Option<String>,
+    #[allow(dead_code)]
     input: Option<serde_json::Value>,
     output: Option<String>,
 }
@@ -37,8 +38,10 @@ struct ClaudeUsage {
     input_tokens: u64,
     output_tokens: u64,
     #[serde(default)]
+    #[allow(dead_code)]
     cache_creation_input_tokens: u64,
     #[serde(default)]
+    #[allow(dead_code)]
     cache_read_input_tokens: u64,
 }
 
@@ -70,8 +73,6 @@ impl AgentRunner for ClaudeRunner {
         let prompt = crate::prompt::render_prompt(&template, issue, attempt, repo)?;
 
         // Track tokens
-        let mut total_input_tokens: u64 = 0;
-        let mut total_output_tokens: u64 = 0;
         let mut last_reported_input: u64 = 0;
         let mut last_reported_output: u64 = 0;
 
@@ -147,15 +148,12 @@ impl AgentRunner for ClaudeRunner {
                             "result" => {
                                 // Extract usage
                                 if let Some(usage) = event.usage {
-                                    total_input_tokens = usage.input_tokens;
-                                    total_output_tokens = usage.output_tokens;
+                                    // Compute delta from last reported values
+                                    let input_delta = usage.input_tokens.saturating_sub(last_reported_input);
+                                    let output_delta = usage.output_tokens.saturating_sub(last_reported_output);
 
-                                    // Compute delta
-                                    let input_delta = total_input_tokens.saturating_sub(last_reported_input);
-                                    let output_delta = total_output_tokens.saturating_sub(last_reported_output);
-
-                                    last_reported_input = total_input_tokens;
-                                    last_reported_output = total_output_tokens;
+                                    last_reported_input = usage.input_tokens;
+                                    last_reported_output = usage.output_tokens;
 
                                     let _ = update_tx.send((issue.id.clone(), AgentUpdate::Event {
                                         event_type: "result".to_string(),

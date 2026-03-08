@@ -42,7 +42,7 @@ pub fn init_logging(log_dir: Option<&std::path::Path>) {
 }
 
 /// Initialize JSON logging
-pub fn init_json_logging(log_dir: Option<&std::path::Path>) {
+pub fn init_json_logging(_log_dir: Option<&std::path::Path>) {
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info"));
 
