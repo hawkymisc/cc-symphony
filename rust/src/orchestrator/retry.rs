@@ -45,6 +45,24 @@ pub fn compute_failure_backoff(attempt: u32, max_backoff_ms: u64) -> u64 {
     exponential.min(max_backoff_ms)
 }
 
+/// Maximum tracker backoff in milliseconds (5 minutes)
+const MAX_TRACKER_BACKOFF_MS: u64 = 300_000;
+
+/// Compute tracker poll backoff delay in milliseconds.
+///
+/// Uses the poll interval as the base and doubles it for each consecutive
+/// failure, capped at `MAX_TRACKER_BACKOFF_MS`.
+///
+/// # Arguments
+/// * `poll_interval_ms` - The normal poll interval
+/// * `consecutive_failures` - How many consecutive failures (1-indexed)
+pub fn compute_tracker_backoff(poll_interval_ms: u64, consecutive_failures: u32) -> u64 {
+    let exp = consecutive_failures.saturating_sub(1);
+    poll_interval_ms
+        .saturating_mul(2u64.saturating_pow(exp))
+        .min(MAX_TRACKER_BACKOFF_MS)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,5 +110,36 @@ mod tests {
         // Test the standalone function
         assert_eq!(compute_failure_backoff(1, 300_000), 10_000);
         assert_eq!(compute_failure_backoff(2, 300_000), 20_000);
+    }
+
+    #[test]
+    fn tracker_backoff_doubles_each_failure() {
+        // poll_interval = 30s
+        assert_eq!(compute_tracker_backoff(30_000, 1), 30_000);  // 30s * 2^0
+        assert_eq!(compute_tracker_backoff(30_000, 2), 60_000);  // 30s * 2^1
+        assert_eq!(compute_tracker_backoff(30_000, 3), 120_000); // 30s * 2^2
+        assert_eq!(compute_tracker_backoff(30_000, 4), 240_000); // 30s * 2^3
+    }
+
+    #[test]
+    fn tracker_backoff_capped_at_5_minutes() {
+        // 30s * 2^4 = 480s > 300s cap
+        assert_eq!(compute_tracker_backoff(30_000, 5), 300_000);
+        assert_eq!(compute_tracker_backoff(30_000, 10), 300_000);
+        assert_eq!(compute_tracker_backoff(30_000, 100), 300_000);
+    }
+
+    #[test]
+    fn tracker_backoff_saturates_on_overflow() {
+        // Extremely large values should not panic
+        assert_eq!(compute_tracker_backoff(u64::MAX, 100), 300_000);
+        assert_eq!(compute_tracker_backoff(30_000, u32::MAX), 300_000);
+    }
+
+    #[test]
+    fn tracker_backoff_with_zero_failures() {
+        // Edge case: 0 failures (should not happen, but be safe)
+        // 2^(0-1) saturates to 2^0 = 1 due to saturating_sub
+        assert_eq!(compute_tracker_backoff(30_000, 0), 30_000);
     }
 }

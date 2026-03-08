@@ -8,7 +8,7 @@ mod retry;
 
 pub use state::{OrchestratorState, RunningEntry};
 pub use dispatch::select_candidates;
-pub use retry::{compute_backoff, ExitType};
+pub use retry::{compute_backoff, compute_tracker_backoff, ExitType};
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -171,6 +171,8 @@ impl<T: Tracker + 'static, A: AgentRunner + 'static> Orchestrator<T, A> {
                             let _ = reply.send(snapshot);
                         }
                         OrchestratorMsg::RefreshRequest { reply } => {
+                            // Manual refresh clears backoff so the poll actually runs
+                            state.skip_ticks_until = None;
                             // Cancel-safe: handle_tick makes a network call.
                             tokio::select! {
                                 biased;
@@ -229,9 +231,10 @@ impl<T: Tracker + 'static, A: AgentRunner + 'static> Orchestrator<T, A> {
                         *retry_after_seconds * 1000
                     }
                     _ => {
-                        let base = state.poll_interval_ms;
-                        let exp = state.consecutive_tracker_failures.saturating_sub(1);
-                        base.saturating_mul(2u64.saturating_pow(exp)).min(300_000)
+                        compute_tracker_backoff(
+                            state.poll_interval_ms,
+                            state.consecutive_tracker_failures,
+                        )
                     }
                 };
                 warn!(

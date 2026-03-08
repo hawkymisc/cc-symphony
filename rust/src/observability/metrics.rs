@@ -24,6 +24,12 @@ pub struct RuntimeSnapshot {
     pub agent_totals: TokenTotals,
     /// Rate limit info
     pub rate_limits: Option<RateLimitInfo>,
+    /// Consecutive tracker poll failures (0 = healthy)
+    #[serde(default)]
+    pub tracker_failures: u32,
+    /// Whether the orchestrator is in tracker backoff
+    #[serde(default)]
+    pub tracker_backoff: bool,
 }
 
 /// Snapshot of a retrying entry
@@ -75,6 +81,8 @@ impl Default for RuntimeSnapshot {
             retrying: vec![],
             agent_totals: TokenTotals::new(),
             rate_limits: None,
+            tracker_failures: 0,
+            tracker_backoff: false,
         }
     }
 }
@@ -128,6 +136,8 @@ mod tests {
                 reset_at: Utc::now() + chrono::Duration::hours(1),
                 source: "github".to_string(),
             }),
+            tracker_failures: 0,
+            tracker_backoff: false,
         };
 
         let json = serde_json::to_string(&snapshot).unwrap();

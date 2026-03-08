@@ -164,6 +164,10 @@ impl OrchestratorState {
             retrying,
             agent_totals,
             rate_limits: self.rate_limits.clone(),
+            tracker_failures: self.consecutive_tracker_failures,
+            tracker_backoff: self.skip_ticks_until
+                .map(|until| tokio::time::Instant::now() < until)
+                .unwrap_or(false),
         }
     }
 }
