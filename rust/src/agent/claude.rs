@@ -86,10 +86,10 @@ impl AgentRunner for ClaudeRunner {
             .kill_on_drop(true);
 
         if config.claude.skip_permissions {
+            // SPEC §10.6: skip_permissions implies all tools allowed;
+            // allowed_tools is ignored when skip_permissions is true.
             cmd.arg("--dangerously-skip-permissions");
-        }
-
-        if let Some(ref tools) = config.claude.allowed_tools {
+        } else if let Some(ref tools) = config.claude.allowed_tools {
             cmd.arg("--allowedTools").arg(tools.join(","));
         }
 

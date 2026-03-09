@@ -30,7 +30,7 @@ pub enum ConfigError {
     #[error("Missing claude.command")]
     MissingClaudeCommand,
 
-    #[error("Permission configuration error: must set either skip_permissions=true or allowed_tools")]
+    #[error("Permission configuration error: must set either skip_permissions=true or a non-empty allowed_tools list")]
     PermissionConfigError,
 
     #[error("Failed to parse config: {0}")]
@@ -371,9 +371,11 @@ impl AppConfig {
         }
 
         // Validate permission settings (SPEC §10.6)
-        // Without skip_permissions or allowed_tools, Claude Code enters interactive permission
-        // mode and hangs waiting on stdin, which Symphony never writes to.
-        if !self.claude.skip_permissions && self.claude.allowed_tools.is_none() {
+        // Without skip_permissions or a non-empty allowed_tools, Claude Code enters interactive
+        // permission mode and hangs waiting on stdin, which Symphony never writes to.
+        if !self.claude.skip_permissions
+            && self.claude.allowed_tools.as_ref().is_none_or(|t| t.is_empty())
+        {
             return Err(ConfigError::PermissionConfigError);
         }
 
@@ -659,6 +661,48 @@ mod tests {
                   allowed_tools:
                     - "Bash"
                     - "Read"
+            "#).unwrap(),
+            prompt_template: String::new(),
+            path: String::new(),
+        };
+
+        let config = AppConfig::from_workflow(&workflow).unwrap();
+        let result = config.validate();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn config_validate_empty_allowed_tools_rejected() {
+        let workflow = crate::workflow::LoadedWorkflow {
+            config: serde_yaml::from_str(r#"
+                tracker:
+                  api_key: "test"
+                  repo: "owner/repo"
+                claude:
+                  command: "claude"
+                  allowed_tools: []
+            "#).unwrap(),
+            prompt_template: String::new(),
+            path: String::new(),
+        };
+
+        let config = AppConfig::from_workflow(&workflow).unwrap();
+        let result = config.validate();
+        assert!(matches!(result, Err(ConfigError::PermissionConfigError)));
+    }
+
+    #[test]
+    fn config_validate_skip_permissions_with_allowed_tools_passes() {
+        let workflow = crate::workflow::LoadedWorkflow {
+            config: serde_yaml::from_str(r#"
+                tracker:
+                  api_key: "test"
+                  repo: "owner/repo"
+                claude:
+                  command: "claude"
+                  skip_permissions: true
+                  allowed_tools:
+                    - "Bash"
             "#).unwrap(),
             prompt_template: String::new(),
             path: String::new(),
