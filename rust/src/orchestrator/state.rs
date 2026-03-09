@@ -124,8 +124,9 @@ impl OrchestratorState {
         }
     }
 
-    /// Evict the oldest retry entry if the queue is at capacity
-    pub fn evict_oldest_retry_if_full(&mut self) {
+    /// Evict the oldest retry entry if the queue is at capacity.
+    /// Returns the evicted entry's workspace path (if any) so the caller can schedule cleanup.
+    pub fn evict_oldest_retry_if_full(&mut self) -> Option<std::path::PathBuf> {
         if self.retry_attempts.len() >= self.max_retry_queue_size {
             if let Some(oldest_id) = self.retry_attempts.iter()
                 .min_by_key(|(_, entry)| entry.due_at)
@@ -136,10 +137,12 @@ impl OrchestratorState {
                     self.retry_attempts.len(),
                     oldest_id
                 );
-                self.retry_attempts.remove(&oldest_id);
+                let evicted = self.retry_attempts.remove(&oldest_id);
                 self.claimed.remove(&oldest_id);
+                return evicted.and_then(|e| e.workspace_path);
             }
         }
+        None
     }
 
     /// Convert to a snapshot for observability

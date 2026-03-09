@@ -317,12 +317,20 @@ impl GitHubTracker {
 
     /// Parse owner/repo format
     fn parse_repo(&self) -> Result<(&str, &str), TrackerError> {
-        self.config.repo.split_once('/').ok_or_else(|| {
+        let (owner, repo) = self.config.repo.split_once('/').ok_or_else(|| {
             TrackerError::ApiRequest(format!(
                 "Invalid repo format: {}. Expected owner/repo",
                 self.config.repo
             ))
-        })
+        })?;
+        // Reject empty segments and extra slashes (e.g. "owner/repo/extra")
+        if owner.is_empty() || repo.is_empty() || repo.contains('/') {
+            return Err(TrackerError::ApiRequest(format!(
+                "Invalid repo format: {}. Expected owner/repo",
+                self.config.repo
+            )));
+        }
+        Ok((owner, repo))
     }
 
     /// Normalize GitHub issue to domain Issue
@@ -463,6 +471,36 @@ mod tests {
         };
 
         let tracker = GitHubTracker::new(config).unwrap();
+        assert!(tracker.parse_repo().is_err());
+    }
+
+    fn make_tracker_with_repo(repo: &str) -> GitHubTracker {
+        let config = GitHubConfig {
+            endpoint: GITHUB_GRAPHQL_ENDPOINT.to_string(),
+            api_key: "test".to_string(),
+            repo: repo.to_string(),
+            labels: vec![],
+            active_states: vec!["open".to_string()],
+            terminal_states: vec!["closed".to_string()],
+        };
+        GitHubTracker::new(config).unwrap()
+    }
+
+    #[test]
+    fn test_parse_repo_extra_slash_rejected() {
+        let tracker = make_tracker_with_repo("owner/repo/extra");
+        assert!(tracker.parse_repo().is_err());
+    }
+
+    #[test]
+    fn test_parse_repo_empty_owner_rejected() {
+        let tracker = make_tracker_with_repo("/repo");
+        assert!(tracker.parse_repo().is_err());
+    }
+
+    #[test]
+    fn test_parse_repo_empty_repo_rejected() {
+        let tracker = make_tracker_with_repo("owner/");
         assert!(tracker.parse_repo().is_err());
     }
 }
