@@ -16,6 +16,21 @@ use symphony::orchestrator::OrchestratorMsg;
 // Test helpers
 // ---------------------------------------------------------------------------
 
+/// Poll the server until it accepts a TCP connection (up to ~2 seconds).
+/// This avoids flaky tests caused by a fixed sleep that might be too short
+/// on slow CI machines.
+async fn wait_for_server(port: u16) {
+    let addr = format!("127.0.0.1:{}", port);
+    for _ in 0..40 {
+        // 40 attempts × 50ms = 2s max wait
+        if tokio::net::TcpStream::connect(&addr).await.is_ok() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("server on port {} did not become ready within 2 seconds", port);
+}
+
 /// Bind an ephemeral TCP port, start the HTTP server, and return a reqwest client
 /// configured with the base URL plus the cancel token.
 ///
@@ -51,8 +66,8 @@ async fn start_test_server() -> (reqwest::Client, String, CancellationToken) {
             .unwrap();
     });
 
-    // Give the server a moment to start accepting connections
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    // Wait until the server is actually accepting connections
+    wait_for_server(port).await;
 
     let client = reqwest::Client::new();
     (client, base_url, cancel)
@@ -174,7 +189,8 @@ async fn post_api_refresh_sends_refresh_request_to_orchestrator() {
             .await
             .unwrap();
     });
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    // Poll until the server is accepting connections (avoids flaky fixed-sleep)
+    wait_for_server(port).await;
 
     let client = reqwest::Client::new();
     client
@@ -255,9 +271,11 @@ async fn server_shuts_down_on_cancel() {
         .unwrap();
     assert_eq!(res.status(), 200);
 
-    // Cancel the server
+    // Cancel the server and wait for it to finish shutting down.
+    // 200ms is generous enough for the graceful-shutdown path to close the
+    // listener even on slow CI machines.
     cancel.cancel();
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Subsequent request should fail (connection refused)
     let err = client
@@ -288,7 +306,8 @@ async fn post_api_refresh_returns_503_when_orchestrator_closed() {
             .await
             .unwrap();
     });
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    // Poll until the server is accepting connections (avoids flaky fixed-sleep)
+    wait_for_server(port).await;
 
     let client = reqwest::Client::new();
     let res = client
@@ -352,7 +371,8 @@ async fn get_api_status_returns_503_when_orchestrator_closed() {
             .await
             .unwrap();
     });
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    // Poll until the server is accepting connections (avoids flaky fixed-sleep)
+    wait_for_server(port).await;
 
     let client = reqwest::Client::new();
     let res = client
