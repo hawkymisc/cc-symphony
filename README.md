@@ -1,5 +1,7 @@
 # Symphony
 
+**[English](README.md)** | [日本語](docs/ja/README.md) | [中文](docs/zh/README.md) | [한국어](docs/ko/README.md)
+
 Symphony turns project work into isolated, autonomous implementation runs, allowing teams to manage
 work instead of supervising coding agents.
 
