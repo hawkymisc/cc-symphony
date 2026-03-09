@@ -8,11 +8,13 @@ use tokio::sync::{mpsc, Mutex};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
-use symphony::agent::{AgentError, AgentRunner, AgentUpdate};
+use symphony::agent::{AgentError, AgentRunConfig, AgentRunner, AgentUpdate};
 use symphony::config::AppConfig;
 use symphony::domain::Issue;
 use symphony::orchestrator::{Orchestrator, OrchestratorMsg};
 use symphony::tracker::{MemoryTracker, Tracker, TrackerError};
+
+mod common;
 
 // ─── MockAgentRunner ──────────────────────────────────────────────────────────
 
@@ -57,7 +59,7 @@ impl AgentRunner for MockAgentRunner {
         &self,
         issue: &Issue,
         _attempt: Option<u32>,
-        _config: &AppConfig,
+        _config: &AgentRunConfig,
         _update_tx: mpsc::UnboundedSender<(String, AgentUpdate)>,
         cancel: CancellationToken,
     ) -> Result<(), AgentError> {
@@ -78,17 +80,11 @@ impl AgentRunner for MockAgentRunner {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 fn make_config(max_concurrent: usize) -> AppConfig {
-    let mut config = AppConfig::default();
-    config.agent.max_concurrent_agents = max_concurrent;
-    // Very short poll so tests don't wait long
-    config.polling.interval_ms = 50;
-    config
+    common::make_app_config_with_concurrency(max_concurrent)
 }
 
 fn make_open_issue(id: &str, identifier: &str) -> Issue {
-    let mut issue = Issue::new(id, identifier, "Test issue");
-    issue.state = "open".to_string();
-    issue
+    common::make_open_issue(id, identifier)
 }
 
 /// Run the orchestrator in background, fire one tick, then shut it down.
@@ -420,7 +416,7 @@ impl AgentRunner for TokenReportingAgent {
         &self,
         issue: &Issue,
         _attempt: Option<u32>,
-        _config: &AppConfig,
+        _config: &AgentRunConfig,
         update_tx: mpsc::UnboundedSender<(String, AgentUpdate)>,
         cancel: CancellationToken,
     ) -> Result<(), AgentError> {
@@ -618,7 +614,7 @@ async fn cleanup_workspace_called_when_issue_closed_on_retry() {
     config.workspace.root = workspace_root.clone();
     config.hooks.before_remove = Some(format!("touch {}", flag_file.display()));
 
-    let (orchestrator, tx) = Orchestrator::new(tracker, agent, config);
+    let (orchestrator, _tx) = Orchestrator::new(tracker, agent, config);
     let cancel = CancellationToken::new();
     let cancel_clone = cancel.clone();
 
@@ -682,7 +678,7 @@ async fn cleanup_workspace_called_when_issue_not_found_on_retry() {
     config.workspace.root = workspace_root.clone();
     config.hooks.before_remove = Some(format!("touch {}", flag_file.display()));
 
-    let (orchestrator, tx) = Orchestrator::new(tracker, agent, config);
+    let (orchestrator, _tx) = Orchestrator::new(tracker, agent, config);
     let cancel = CancellationToken::new();
     let cancel_clone = cancel.clone();
 
@@ -716,7 +712,7 @@ impl AgentRunner for FastForOneAgent {
         &self,
         issue: &Issue,
         _attempt: Option<u32>,
-        _config: &AppConfig,
+        _config: &AgentRunConfig,
         _update_tx: mpsc::UnboundedSender<(String, AgentUpdate)>,
         cancel: CancellationToken,
     ) -> Result<(), AgentError> {

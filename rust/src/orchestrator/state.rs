@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use chrono::{DateTime, Utc};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+use tracing::warn;
 
 use crate::config::AppConfig;
 use crate::domain::{Issue, RetryEntry};
@@ -101,6 +102,8 @@ pub struct OrchestratorState {
     pub consecutive_tracker_failures: u32,
     /// Instant until which ticks should be skipped (tracker backoff)
     pub skip_ticks_until: Option<tokio::time::Instant>,
+    /// Maximum retry queue size
+    pub max_retry_queue_size: usize,
 }
 
 impl OrchestratorState {
@@ -117,7 +120,29 @@ impl OrchestratorState {
             rate_limits: None,
             consecutive_tracker_failures: 0,
             skip_ticks_until: None,
+            max_retry_queue_size: config.agent.max_retry_queue_size,
         }
+    }
+
+    /// Evict the oldest retry entry if the queue is at capacity.
+    /// Returns the evicted entry's workspace path (if any) so the caller can schedule cleanup.
+    pub fn evict_oldest_retry_if_full(&mut self) -> Option<std::path::PathBuf> {
+        if self.retry_attempts.len() >= self.max_retry_queue_size {
+            if let Some(oldest_id) = self.retry_attempts.iter()
+                .min_by_key(|(_, entry)| entry.due_at)
+                .map(|(id, _)| id.clone())
+            {
+                warn!(
+                    "Retry queue full ({} entries), evicting oldest entry for issue {}",
+                    self.retry_attempts.len(),
+                    oldest_id
+                );
+                let evicted = self.retry_attempts.remove(&oldest_id);
+                self.claimed.remove(&oldest_id);
+                return evicted.and_then(|e| e.workspace_path);
+            }
+        }
+        None
     }
 
     /// Convert to a snapshot for observability
@@ -220,5 +245,99 @@ mod tests {
 
         let snapshot = state.to_snapshot();
         assert_eq!(snapshot.completed_count, 2);
+    }
+
+    #[test]
+    fn max_retry_queue_size_initialized_from_config() {
+        let mut config = AppConfig::default();
+        config.agent.max_retry_queue_size = 42;
+        let state = OrchestratorState::new(&config);
+        assert_eq!(state.max_retry_queue_size, 42);
+    }
+
+    #[test]
+    fn max_retry_queue_size_default_is_1000() {
+        let config = AppConfig::default();
+        let state = OrchestratorState::new(&config);
+        assert_eq!(state.max_retry_queue_size, 1000);
+    }
+
+    #[tokio::test]
+    async fn retry_queue_evicts_oldest_when_full() {
+        let mut config = AppConfig::default();
+        config.agent.max_retry_queue_size = 2;
+        let mut state = OrchestratorState::new(&config);
+
+        let now = std::time::Instant::now();
+
+        state.retry_attempts.insert("issue-1".to_string(), crate::domain::RetryEntry {
+            attempt: 1,
+            due_at: now - std::time::Duration::from_secs(10), // oldest
+            timer_handle: tokio::spawn(async {}),
+            identifier: Some("1".to_string()),
+            error: None,
+            workspace_path: None,
+        });
+        state.retry_attempts.insert("issue-2".to_string(), crate::domain::RetryEntry {
+            attempt: 1,
+            due_at: now,
+            timer_handle: tokio::spawn(async {}),
+            identifier: Some("2".to_string()),
+            error: None,
+            workspace_path: None,
+        });
+        state.claimed.insert("issue-1".to_string());
+        state.claimed.insert("issue-2".to_string());
+
+        state.evict_oldest_retry_if_full();
+
+        assert_eq!(state.retry_attempts.len(), 1);
+        assert!(!state.retry_attempts.contains_key("issue-1")); // oldest evicted
+        assert!(state.retry_attempts.contains_key("issue-2"));
+    }
+
+    #[tokio::test]
+    async fn retry_queue_eviction_releases_claim() {
+        let mut config = AppConfig::default();
+        config.agent.max_retry_queue_size = 1;
+        let mut state = OrchestratorState::new(&config);
+
+        state.retry_attempts.insert("issue-1".to_string(), crate::domain::RetryEntry {
+            attempt: 1,
+            due_at: std::time::Instant::now(),
+            timer_handle: tokio::spawn(async {}),
+            identifier: Some("1".to_string()),
+            error: None,
+            workspace_path: None,
+        });
+        state.claimed.insert("issue-1".to_string());
+
+        state.evict_oldest_retry_if_full();
+
+        assert!(state.retry_attempts.is_empty());
+        assert!(!state.claimed.contains("issue-1")); // claim released
+    }
+
+    #[tokio::test]
+    async fn retry_queue_no_eviction_when_under_capacity() {
+        let mut config = AppConfig::default();
+        config.agent.max_retry_queue_size = 3;
+        let mut state = OrchestratorState::new(&config);
+
+        state.retry_attempts.insert("issue-1".to_string(), crate::domain::RetryEntry {
+            attempt: 1,
+            due_at: std::time::Instant::now(),
+            timer_handle: tokio::spawn(async {}),
+            identifier: Some("1".to_string()),
+            error: None,
+            workspace_path: None,
+        });
+        state.claimed.insert("issue-1".to_string());
+
+        state.evict_oldest_retry_if_full();
+
+        // No eviction should happen since 1 < 3
+        assert_eq!(state.retry_attempts.len(), 1);
+        assert!(state.claimed.contains("issue-1"));
     }
 }

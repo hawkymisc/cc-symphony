@@ -189,7 +189,7 @@ fn rate_limit_tracking() {
 // ─── Integration tests using OrchestratorState ───────────────────────────────
 
 fn make_running_entry(identifier: &str, started_at: chrono::DateTime<Utc>) -> RunningEntry {
-    let mut issue = Issue::new(&format!("gid://github/Issue/{identifier}"), identifier, "test");
+    let mut issue = Issue::new(format!("gid://github/Issue/{identifier}"), identifier, "test");
     issue.state = "open".to_string();
     RunningEntry {
         identifier: identifier.to_string(),

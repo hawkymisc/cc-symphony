@@ -170,8 +170,8 @@ Title: {{ issue.title }}
         // Check config
         assert!(workflow.config.is_mapping());
         let mapping = workflow.config.as_mapping().unwrap();
-        assert!(mapping.contains_key(&serde_yaml::Value::String("tracker".to_string())));
-        assert!(mapping.contains_key(&serde_yaml::Value::String("polling".to_string())));
+        assert!(mapping.contains_key(serde_yaml::Value::String("tracker".to_string())));
+        assert!(mapping.contains_key(serde_yaml::Value::String("polling".to_string())));
 
         // Check prompt template
         assert!(workflow.prompt_template.starts_with("You are working"));

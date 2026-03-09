@@ -185,6 +185,8 @@ pub struct AgentConfig {
     pub max_retry_backoff_ms: u64,
     #[serde(default)]
     pub max_concurrent_agents_by_state: HashMap<String, usize>,
+    #[serde(default = "default_max_retry_queue_size")]
+    pub max_retry_queue_size: usize,
 }
 
 fn default_max_concurrent_agents() -> usize {
@@ -199,6 +201,10 @@ fn default_max_retry_backoff_ms() -> u64 {
     300000 // 5 minutes
 }
 
+fn default_max_retry_queue_size() -> usize {
+    1000
+}
+
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
@@ -206,6 +212,7 @@ impl Default for AgentConfig {
             max_turns: default_max_turns(),
             max_retry_backoff_ms: default_max_retry_backoff_ms(),
             max_concurrent_agents_by_state: HashMap::new(),
+            max_retry_queue_size: default_max_retry_queue_size(),
         }
     }
 }
@@ -270,6 +277,16 @@ impl Default for ClaudeConfig {
 }
 
 impl AppConfig {
+    /// Create an AgentRunConfig from this AppConfig
+    pub fn to_agent_run_config(&self) -> crate::agent::AgentRunConfig {
+        crate::agent::AgentRunConfig {
+            workspace_root: self.workspace.root.clone(),
+            repo: self.tracker.repo.clone().unwrap_or_else(|| "unknown/repo".to_string()),
+            prompt_template: self.prompt_template.clone(),
+            claude: self.claude.clone(),
+        }
+    }
+
     /// Create config from loaded workflow
     pub fn from_workflow(workflow: &LoadedWorkflow) -> Result<Self, ConfigError> {
         // Convert Value to AppConfig with defaults
@@ -398,12 +415,9 @@ fn resolve_env_var(s: &str) -> Result<String, ConfigError> {
             let var_value = std::env::var(var_name).unwrap_or_default();
 
             // Build the new string
-            let before = result[..abs_pos].to_string();
-            let after = result[abs_pos + 1 + var_end..].to_string();
-            result = format!("{}{}{}", before, var_value, after);
-
-            // Update offset to after the replacement
-            offset = before.len() + var_value.len();
+            let new_result = format!("{}{}{}", &result[..abs_pos], var_value, &result[abs_pos + 1 + var_end..]);
+            offset = abs_pos + var_value.len();
+            result = new_result;
         } else {
             break;
         }
@@ -622,6 +636,28 @@ mod tests {
         let debug_output = format!("{:?}", config);
         assert!(!debug_output.contains("ghp_super_secret_token_12345"), "API key should be masked in Debug output");
         assert!(debug_output.contains("[REDACTED]"), "Debug output should contain [REDACTED]");
+    }
+
+    #[test]
+    fn app_config_to_agent_run_config() {
+        let mut config = AppConfig::default();
+        config.tracker.repo = Some("owner/repo".to_string());
+        config.prompt_template = "Test prompt".to_string();
+
+        let agent_config = config.to_agent_run_config();
+
+        assert_eq!(agent_config.workspace_root, config.workspace.root);
+        assert_eq!(agent_config.repo, "owner/repo");
+        assert_eq!(agent_config.prompt_template, "Test prompt");
+        assert_eq!(agent_config.claude.command, config.claude.command);
+    }
+
+    #[test]
+    fn app_config_to_agent_run_config_default_repo() {
+        let config = AppConfig::default();
+        // tracker.repo is None by default
+        let agent_config = config.to_agent_run_config();
+        assert_eq!(agent_config.repo, "unknown/repo");
     }
 
     #[test]

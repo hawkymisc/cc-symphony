@@ -25,6 +25,18 @@ use crate::agent::{AgentRunner, AgentUpdate};
 use crate::observability::RuntimeSnapshot;
 use crate::workspace::{prepare_workspace, run_before_run_hook, run_after_run_hook, cleanup_workspace};
 
+/// Retry attempt value indicating a successful (normal) exit.
+const NORMAL_EXIT_ATTEMPT: u32 = 0;
+
+/// Schedule async workspace cleanup for an evicted retry entry's workspace path.
+fn schedule_eviction_cleanup(path: std::path::PathBuf, hooks: crate::config::HooksConfig) {
+    tokio::spawn(async move {
+        if let Err(e) = cleanup_workspace(&path, &hooks).await {
+            warn!(error = %e, "cleanup_workspace for evicted entry failed (non-fatal)");
+        }
+    });
+}
+
 /// Messages sent to the orchestrator
 #[derive(Debug)]
 pub enum OrchestratorMsg {
@@ -319,8 +331,9 @@ impl<T: Tracker + 'static, A: AgentRunner + 'static> Orchestrator<T, A> {
                 return;
             }
 
+            let agent_config = config.to_agent_run_config();
             let result = agent_runner
-                .run(&issue_clone, attempt, &config, update_tx, cancel_clone)
+                .run(&issue_clone, attempt, &agent_config, update_tx, cancel_clone)
                 .await;
 
             // Run after_run hook (non-fatal)
@@ -371,8 +384,11 @@ impl<T: Tracker + 'static, A: AgentRunner + 'static> Orchestrator<T, A> {
                     });
 
                     // attempt = 0: success resets consecutive failure counter
+                    if let Some(path) = state.evict_oldest_retry_if_full() {
+                        schedule_eviction_cleanup(path, self.config.hooks.clone());
+                    }
                     state.retry_attempts.insert(issue_id.clone(), RetryEntry {
-                        attempt: 0,
+                        attempt: NORMAL_EXIT_ATTEMPT,
                         due_at: std::time::Instant::now() + Duration::from_millis(1_000),
                         timer_handle,
                         identifier: Some(identifier),
@@ -400,6 +416,9 @@ impl<T: Tracker + 'static, A: AgentRunner + 'static> Orchestrator<T, A> {
                         let _ = tx.send(OrchestratorMsg::RetryIssue { issue_id: id });
                     });
 
+                    if let Some(path) = state.evict_oldest_retry_if_full() {
+                        schedule_eviction_cleanup(path, self.config.hooks.clone());
+                    }
                     state.retry_attempts.insert(issue_id.clone(), RetryEntry {
                         attempt: failure_count,
                         due_at: std::time::Instant::now() + Duration::from_millis(backoff_ms),
@@ -481,6 +500,9 @@ impl<T: Tracker + 'static, A: AgentRunner + 'static> Orchestrator<T, A> {
                                     tokio::time::sleep(Duration::from_millis(SLOT_WAIT_MS)).await;
                                     let _ = tx.send(OrchestratorMsg::RetryIssue { issue_id: id });
                                 });
+                                if let Some(path) = state.evict_oldest_retry_if_full() {
+                                    schedule_eviction_cleanup(path, self.config.hooks.clone());
+                                }
                                 state.retry_attempts.insert(issue_id.clone(), RetryEntry {
                                     attempt: entry_attempt,
                                     due_at: std::time::Instant::now() + Duration::from_millis(SLOT_WAIT_MS),
@@ -520,6 +542,9 @@ impl<T: Tracker + 'static, A: AgentRunner + 'static> Orchestrator<T, A> {
                         tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
                         let _ = tx.send(OrchestratorMsg::RetryIssue { issue_id: id });
                     });
+                    if let Some(path) = state.evict_oldest_retry_if_full() {
+                        schedule_eviction_cleanup(path, self.config.hooks.clone());
+                    }
                     state.retry_attempts.insert(issue_id.clone(), crate::domain::RetryEntry {
                         attempt: prior_failures,
                         due_at: std::time::Instant::now() + Duration::from_millis(backoff_ms),

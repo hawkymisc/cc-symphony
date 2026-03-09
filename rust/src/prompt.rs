@@ -122,7 +122,6 @@ Instructions:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
 
     fn create_test_issue() -> Issue {
         let mut issue = Issue::new("gid://github/Issue/42", "42", "Fix the bug");
