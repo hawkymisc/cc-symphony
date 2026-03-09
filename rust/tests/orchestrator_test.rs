@@ -889,6 +889,71 @@ impl Tracker for FailThenSucceedTracker {
     }
 }
 
+// ─── is_blocked() filtering tests ─────────────────────────────────────────────
+
+/// An issue with an active blocker must NOT be dispatched by the orchestrator.
+#[tokio::test]
+async fn test_blocked_issue_not_dispatched() {
+    use symphony::domain::BlockerRef;
+
+    let mut issue = make_open_issue("I_1", "1");
+    issue.blocked_by = vec![BlockerRef { identifier: "I_blocker".to_string(), is_active: true }];
+
+    let tracker = MemoryTracker::with_issues(vec![issue]);
+    let agent = MockAgentRunner::success();
+    let dispatched = Arc::clone(&agent.dispatched);
+
+    run_orchestrator_for(tracker, agent, make_config(5), Duration::from_millis(200)).await;
+
+    let ids = dispatched.lock().await;
+    assert!(ids.is_empty(), "Blocked issue should not be dispatched");
+}
+
+/// An issue whose blockers are all inactive (is_active: false) should be dispatched normally.
+#[tokio::test]
+async fn test_unblocked_issue_dispatched() {
+    use symphony::domain::BlockerRef;
+
+    let mut issue = make_open_issue("I_1", "1");
+    issue.blocked_by = vec![
+        BlockerRef { identifier: "I_b1".to_string(), is_active: false },
+        BlockerRef { identifier: "I_b2".to_string(), is_active: false },
+    ];
+
+    let tracker = MemoryTracker::with_issues(vec![issue]);
+    let agent = MockAgentRunner::success();
+    let dispatched = Arc::clone(&agent.dispatched);
+
+    run_orchestrator_for(tracker, agent, make_config(5), Duration::from_millis(200)).await;
+
+    let ids = dispatched.lock().await;
+    assert!(ids.contains(&"I_1".to_string()), "Issue with only inactive blockers should be dispatched");
+}
+
+/// Unit-level test: is_blocked() returns true with active blockers, false after clearing them.
+#[test]
+fn test_issue_dispatched_after_blocker_cleared() {
+    use symphony::domain::BlockerRef;
+
+    let mut issue = make_open_issue("I_1", "1");
+    issue.blocked_by = vec![
+        BlockerRef { identifier: "I_b1".to_string(), is_active: true },
+        BlockerRef { identifier: "I_b2".to_string(), is_active: false },
+    ];
+    assert!(issue.is_blocked(), "Issue with an active blocker should be blocked");
+
+    // Clear all blockers
+    issue.blocked_by.clear();
+    assert!(!issue.is_blocked(), "Issue with no blockers should not be blocked");
+
+    // Set only inactive blockers
+    issue.blocked_by = vec![
+        BlockerRef { identifier: "I_b1".to_string(), is_active: false },
+        BlockerRef { identifier: "I_b2".to_string(), is_active: false },
+    ];
+    assert!(!issue.is_blocked(), "Issue with only inactive blockers should not be blocked");
+}
+
 /// After tracker errors, no issues should be dispatched since the tracker
 /// never returns candidates.
 #[tokio::test]

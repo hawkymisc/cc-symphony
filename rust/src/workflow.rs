@@ -265,4 +265,116 @@ Title: {{ issue.title }}
         assert!(workflow.prompt_template.contains("Line 2"));
         assert!(workflow.prompt_template.contains("Line 3"));
     }
+
+    // ---- Edge case tests ----
+
+    #[test]
+    fn load_workflow_bom_utf8_prefix() {
+        // NOTE: BOM not supported — parser treats it as missing front matter.
+        // trim_start() does not strip the BOM character (\u{FEFF}), so
+        // starts_with("---") fails and the entire content becomes the template.
+        let contents = "\u{FEFF}---\nkey: value\n---\nPrompt";
+        let file = create_temp_file(contents);
+        let result = load_workflow(file.path());
+
+        assert!(result.is_ok());
+        let workflow = result.unwrap();
+
+        // BOM causes the parser to miss the front matter delimiter
+        assert!(workflow.config.as_mapping().unwrap().is_empty());
+        assert_eq!(workflow.prompt_template, contents);
+    }
+
+    #[test]
+    fn load_workflow_crlf_line_endings() {
+        // NOTE: CRLF partially supported — lines() and trim() handle \r\n for
+        // delimiter detection, but the byte offset calculation assumes \n-only
+        // line endings (l.len() + 1). With \r\n the offset is off by one per line,
+        // which can cause the YAML slice and body extraction to be slightly wrong.
+        let contents = "---\r\nkey: value\r\n---\r\nPrompt";
+        let file = create_temp_file(contents);
+        let result = load_workflow(file.path());
+
+        // The parser should still succeed since lines()/trim() handle \r\n
+        assert!(result.is_ok());
+        let workflow = result.unwrap();
+
+        // Verify YAML was parsed (the key may have a trailing \r in some edge cases,
+        // but serde_yaml is tolerant of that)
+        assert!(workflow.config.is_mapping());
+        let mapping = workflow.config.as_mapping().unwrap();
+        assert!(!mapping.is_empty(), "front matter should be parsed despite CRLF");
+
+        // The prompt body may contain a leading \r due to byte offset miscalculation
+        assert!(
+            workflow.prompt_template.contains("Prompt"),
+            "body should contain 'Prompt', got: {:?}",
+            workflow.prompt_template
+        );
+    }
+
+    #[test]
+    fn load_workflow_triple_dash_in_yaml_value() {
+        // The closing delimiter check is `line.trim() == "---"`, so a YAML value
+        // like `key: "a---b"` will NOT match as a delimiter. This should parse correctly.
+        let contents = "---\nkey: \"a---b\"\n---\nPrompt";
+        let file = create_temp_file(contents);
+        let result = load_workflow(file.path());
+
+        assert!(result.is_ok());
+        let workflow = result.unwrap();
+
+        let mapping = workflow.config.as_mapping().unwrap();
+        let key = serde_yaml::Value::String("key".to_string());
+        assert_eq!(
+            mapping.get(&key).and_then(|v| v.as_str()),
+            Some("a---b"),
+            "triple-dash inside quoted YAML value should be preserved"
+        );
+        assert_eq!(workflow.prompt_template, "Prompt");
+    }
+
+    #[test]
+    fn load_workflow_whitespace_between_front_matter_and_body() {
+        // Blank/whitespace lines between the closing --- and the body should be
+        // stripped by trim_start() applied to the body portion.
+        let contents = "---\nkey: value\n---\n   \nPrompt";
+        let file = create_temp_file(contents);
+        let result = load_workflow(file.path());
+
+        assert!(result.is_ok());
+        let workflow = result.unwrap();
+
+        let mapping = workflow.config.as_mapping().unwrap();
+        assert!(!mapping.is_empty());
+        assert_eq!(
+            workflow.prompt_template, "Prompt",
+            "whitespace between front matter and body should be trimmed"
+        );
+    }
+
+    #[test]
+    fn load_workflow_indented_delimiters() {
+        // The opening delimiter: trim_start() on the whole content strips leading
+        // whitespace, then starts_with("---") matches. The closing delimiter uses
+        // line.trim() == "---", so indented closing also matches.
+        // However, the leading spaces on the first line become part of `trimmed`
+        // only if they precede "---" (trim_start removes them). The YAML content
+        // line "key: value" is not indented here, so it parses fine.
+        let contents = "  ---  \nkey: value\n  ---  \nPrompt";
+        let file = create_temp_file(contents);
+        let result = load_workflow(file.path());
+
+        assert!(result.is_ok());
+        let workflow = result.unwrap();
+
+        let mapping = workflow.config.as_mapping().unwrap();
+        assert!(!mapping.is_empty(), "indented delimiters should still parse front matter");
+
+        assert!(
+            workflow.prompt_template.contains("Prompt"),
+            "body should contain 'Prompt', got: {:?}",
+            workflow.prompt_template
+        );
+    }
 }
