@@ -160,6 +160,14 @@ impl Tracker for IssueClosedOnRetryTracker {
     async fn fetch_issues_by_states(&self, states: &[String]) -> Result<Vec<Issue>, TrackerError> {
         self.inner.fetch_issues_by_states(states).await
     }
+
+    async fn add_label(&self, issue_identifier: &str, label: &str) -> Result<(), TrackerError> {
+        self.inner.add_label(issue_identifier, label).await
+    }
+
+    async fn remove_label(&self, issue_identifier: &str, label: &str) -> Result<(), TrackerError> {
+        self.inner.remove_label(issue_identifier, label).await
+    }
 }
 
 /// When handle_retry finds the issue is no longer active (closed), cleanup_workspace
@@ -232,6 +240,14 @@ async fn cleanup_workspace_called_when_issue_not_found_on_retry() {
 
         async fn fetch_issues_by_states(&self, states: &[String]) -> Result<Vec<Issue>, TrackerError> {
             self.inner.fetch_issues_by_states(states).await
+        }
+
+        async fn add_label(&self, issue_identifier: &str, label: &str) -> Result<(), TrackerError> {
+            self.inner.add_label(issue_identifier, label).await
+        }
+
+        async fn remove_label(&self, issue_identifier: &str, label: &str) -> Result<(), TrackerError> {
+            self.inner.remove_label(issue_identifier, label).await
         }
     }
 

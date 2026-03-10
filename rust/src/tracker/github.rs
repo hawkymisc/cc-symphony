@@ -354,6 +354,14 @@ impl GitHubTracker {
             updated_at: Some(gh.updated_at),
         }
     }
+
+    /// Derive the REST API base URL from the GraphQL endpoint.
+    ///
+    /// - `https://api.github.com/graphql` → `https://api.github.com`
+    /// - `http://localhost:1234/graphql`   → `http://localhost:1234`
+    fn rest_base_url(&self) -> String {
+        self.config.endpoint.trim_end_matches("/graphql").to_string()
+    }
 }
 
 #[async_trait]
@@ -420,6 +428,50 @@ impl Tracker for GitHubTracker {
             return Ok(Vec::new());
         }
         self.fetch_issues_paginated(states, &self.config.labels).await
+    }
+
+    async fn add_label(&self, issue_identifier: &str, label: &str) -> Result<(), TrackerError> {
+        let (owner, repo) = self.parse_repo()?;
+        let base = self.rest_base_url();
+        let url = format!("{}/repos/{}/{}/issues/{}/labels", base, owner, repo, issue_identifier);
+
+        let response = self.client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.config.api_key))
+            .header("User-Agent", "Symphony/0.1.0")
+            .header("Accept", "application/vnd.github+json")
+            .json(&serde_json::json!({ "labels": [label] }))
+            .send()
+            .await
+            .map_err(|e| TrackerError::ApiRequest(e.to_string()))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            return Err(TrackerError::ApiStatus(status.as_u16()));
+        }
+        Ok(())
+    }
+
+    async fn remove_label(&self, issue_identifier: &str, label: &str) -> Result<(), TrackerError> {
+        let (owner, repo) = self.parse_repo()?;
+        let base = self.rest_base_url();
+        let url = format!("{}/repos/{}/{}/issues/{}/labels/{}", base, owner, repo, issue_identifier, label);
+
+        let response = self.client
+            .delete(&url)
+            .header("Authorization", format!("Bearer {}", self.config.api_key))
+            .header("User-Agent", "Symphony/0.1.0")
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .await
+            .map_err(|e| TrackerError::ApiRequest(e.to_string()))?;
+
+        let status = response.status();
+        // 404 means label was already removed — treat as success
+        if !status.is_success() && status.as_u16() != 404 {
+            return Err(TrackerError::ApiStatus(status.as_u16()));
+        }
+        Ok(())
     }
 }
 
@@ -502,5 +554,25 @@ mod tests {
     fn test_parse_repo_empty_repo_rejected() {
         let tracker = make_tracker_with_repo("owner/");
         assert!(tracker.parse_repo().is_err());
+    }
+
+    #[test]
+    fn rest_base_url_strips_graphql_suffix() {
+        let tracker = make_tracker_with_repo("owner/repo");
+        assert_eq!(tracker.rest_base_url(), "https://api.github.com");
+    }
+
+    #[test]
+    fn rest_base_url_preserves_custom_endpoint() {
+        let config = GitHubConfig {
+            endpoint: "http://localhost:4010/graphql".to_string(),
+            api_key: "test".to_string(),
+            repo: "owner/repo".to_string(),
+            labels: vec![],
+            active_states: vec!["open".to_string()],
+            terminal_states: vec!["closed".to_string()],
+        };
+        let tracker = GitHubTracker::new(config).unwrap();
+        assert_eq!(tracker.rest_base_url(), "http://localhost:4010");
     }
 }

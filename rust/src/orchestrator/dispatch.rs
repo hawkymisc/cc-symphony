@@ -37,10 +37,8 @@ pub fn select_candidates(
             !claimed.contains(&issue.id) &&
             // Not in retry queue
             !retry_attempts.contains_key(&issue.id) &&
-            // Is in active state
-            issue.is_active() &&
-            // Not blocked
-            !issue.is_blocked()
+            // Is dispatchable (active, not blocked, no symphony-done/doing label)
+            issue.is_dispatchable()
         })
         .collect();
 
@@ -174,5 +172,46 @@ mod tests {
         assert_eq!(selected[0].identifier, "1");
         assert_eq!(selected[1].identifier, "3");
         assert_eq!(selected[2].identifier, "2");
+    }
+
+    #[test]
+    fn dispatch_skips_symphony_done_label() {
+        let mut candidates = vec![
+            create_test_issue("1", "1", Some(1)),
+            create_test_issue("2", "2", Some(2)),
+        ];
+        candidates[0].labels = vec!["symphony-done".to_string()];
+
+        let selected = select_candidates(&candidates, &HashMap::new(), &HashSet::new(), &HashMap::new(), 10);
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].identifier, "2");
+    }
+
+    #[test]
+    fn dispatch_skips_symphony_doing_label() {
+        let mut candidates = vec![
+            create_test_issue("1", "1", Some(1)),
+            create_test_issue("2", "2", Some(2)),
+        ];
+        candidates[0].labels = vec!["symphony-doing".to_string()];
+
+        let selected = select_candidates(&candidates, &HashMap::new(), &HashSet::new(), &HashMap::new(), 10);
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].identifier, "2");
+    }
+
+    #[test]
+    fn dispatch_allows_issue_without_symphony_labels() {
+        let mut candidates = vec![
+            create_test_issue("1", "1", Some(1)),
+        ];
+        candidates[0].labels = vec!["bug".to_string(), "enhancement".to_string()];
+
+        let selected = select_candidates(&candidates, &HashMap::new(), &HashSet::new(), &HashMap::new(), 10);
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].identifier, "1");
     }
 }

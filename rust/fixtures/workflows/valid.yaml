@@ -55,3 +55,13 @@ Instructions:
 4. Create a Pull Request using `gh pr create`.
 5. If blocked, add a comment to the issue explaining the blocker.
 6. Only stop if you encounter a true blocker (missing auth, permissions, secrets).
+
+## Completion protocol
+
+When your work is complete (PR created or task finished):
+1. Add the `symphony-done` label to signal that no further agent turns are needed:
+   `gh issue edit {{ issue.identifier }} --add-label symphony-done`
+2. Do NOT close the issue — a human will review and close it.
+3. If the task is NOT complete and you are ending your turn for another reason
+   (turn limit, transient error), do NOT add the `symphony-done` label.
+   The orchestrator will automatically re-dispatch this issue for continuation.

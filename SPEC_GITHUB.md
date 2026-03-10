@@ -740,6 +740,9 @@ Distinct terminal reasons are important because retry logic and logs differ.
 
 - `Retry Timer Fired`
   - Re-fetch active candidates and attempt re-dispatch, or release claim if no longer eligible.
+  - [GitHub]: Re-dispatch uses the `is_continuable` predicate (active + not blocked + no
+    `symphony-done` label). The `symphony-doing` label does NOT block continuation because
+    it was set by the current orchestrator instance.
 
 - `Reconciliation State Refresh`
   - Stop runs whose issue states are terminal or no longer active.
@@ -791,9 +794,30 @@ An issue is dispatch-eligible only if all are true:
 - Global concurrency slots are available.
 - Per-state concurrency slots are available.
 - [GitHub]: If `tracker.labels` is configured, the issue has at least one matching label.
+- [GitHub]: The issue does not have the `symphony-done` label (marks completed work).
+- [GitHub]: The issue does not have the `symphony-doing` label (marks in-progress work by another instance).
 
 Note: The blocker rule from the original spec (`Todo` state with non-terminal blockers) is not
 applicable in the GitHub Issues MVP because GitHub does not have native blocker relations. [GitHub]
+
+### 8.1.1 Symphony Label Convention [GitHub]
+
+Symphony uses two reserved labels to track issue lifecycle independently of GitHub's `open`/`closed`
+state. This allows human operators to keep issues open for review while preventing the orchestrator
+from re-dispatching completed work.
+
+| Label | Meaning | New dispatch | Continuation (re-dispatch) |
+|---|---|---|---|
+| _(none)_ | Untouched — eligible for work | Allowed | N/A |
+| `symphony-doing` | An orchestrator instance is actively working on this issue | Blocked | Allowed (same instance) |
+| `symphony-done` | Agent has completed its work on this issue | Blocked | Blocked |
+
+- The agent (or workflow hooks) is responsible for adding/removing these labels via `gh` CLI or
+  GitHub API.
+- The orchestrator reads labels but never writes them; label management is the agent's responsibility
+  (consistent with SPEC §1 boundary: "Ticket writes are performed by the coding agent").
+- When an issue has `symphony-done`, the continuation retry loop (§7.2–7.3) stops, preventing
+  infinite re-dispatch even if the issue remains `open`.
 
 Sorting order (stable intent):
 

@@ -75,6 +75,34 @@ impl Issue {
         self.blocked_by.iter().any(|b| b.is_active)
     }
 
+    /// Check if this issue has the symphony-done label
+    pub fn is_done(&self) -> bool {
+        self.labels.iter().any(|l| l == "symphony-done")
+    }
+
+    /// Check if this issue has the symphony-doing label
+    pub fn is_doing(&self) -> bool {
+        self.labels.iter().any(|l| l == "symphony-doing")
+    }
+
+    /// Check if this issue is eligible for new dispatch (first-time pick-up).
+    ///
+    /// An issue is dispatchable if it is active, not blocked, and has neither
+    /// the `symphony-done` nor `symphony-doing` label.
+    pub fn is_dispatchable(&self) -> bool {
+        self.is_active() && !self.is_blocked() && !self.is_done() && !self.is_doing()
+    }
+
+    /// Check if this issue is eligible for continuation (re-dispatch by the
+    /// same orchestrator instance after a successful turn).
+    ///
+    /// Continuation is allowed when the issue is active, not blocked, and not
+    /// marked as done.  The `symphony-doing` label does NOT block continuation
+    /// because the current instance set that label itself.
+    pub fn is_continuable(&self) -> bool {
+        self.is_active() && !self.is_blocked() && !self.is_done()
+    }
+
     /// Sanitize the identifier for use in paths
     /// Replaces `/` and other unsafe characters with `_`
     pub fn sanitized_identifier(&self) -> String {
@@ -258,6 +286,129 @@ mod tests {
 
         let issue = Issue::new("1", "a:b*c?d\"e<f>g|h", "Test");
         assert_eq!(issue.sanitized_identifier(), "a_b_c_d_e_f_g_h");
+    }
+
+    // ── symphony-done / symphony-doing label tests ──
+
+    #[test]
+    fn is_done_returns_true_when_symphony_done_label_present() {
+        let mut issue = Issue::new("1", "1", "Test");
+        issue.labels = vec!["bug".to_string(), "symphony-done".to_string()];
+        assert!(issue.is_done());
+    }
+
+    #[test]
+    fn is_done_returns_false_when_no_symphony_done_label() {
+        let mut issue = Issue::new("1", "1", "Test");
+        issue.labels = vec!["bug".to_string(), "enhancement".to_string()];
+        assert!(!issue.is_done());
+    }
+
+    #[test]
+    fn is_done_returns_false_for_empty_labels() {
+        let issue = Issue::new("1", "1", "Test");
+        assert!(!issue.is_done());
+    }
+
+    #[test]
+    fn is_doing_returns_true_when_symphony_doing_label_present() {
+        let mut issue = Issue::new("1", "1", "Test");
+        issue.labels = vec!["symphony-doing".to_string()];
+        assert!(issue.is_doing());
+    }
+
+    #[test]
+    fn is_doing_returns_false_when_no_symphony_doing_label() {
+        let issue = Issue::new("1", "1", "Test");
+        assert!(!issue.is_doing());
+    }
+
+    // ── is_dispatchable tests ──
+
+    #[test]
+    fn is_dispatchable_true_for_open_unlabeled_issue() {
+        let issue = Issue::new("1", "1", "Test");
+        assert!(issue.is_dispatchable());
+    }
+
+    #[test]
+    fn is_dispatchable_false_when_symphony_done() {
+        let mut issue = Issue::new("1", "1", "Test");
+        issue.labels = vec!["symphony-done".to_string()];
+        assert!(!issue.is_dispatchable());
+    }
+
+    #[test]
+    fn is_dispatchable_false_when_symphony_doing() {
+        let mut issue = Issue::new("1", "1", "Test");
+        issue.labels = vec!["symphony-doing".to_string()];
+        assert!(!issue.is_dispatchable());
+    }
+
+    #[test]
+    fn is_dispatchable_false_when_closed() {
+        let mut issue = Issue::new("1", "1", "Test");
+        issue.state = "closed".to_string();
+        assert!(!issue.is_dispatchable());
+    }
+
+    #[test]
+    fn is_dispatchable_false_when_blocked() {
+        let mut issue = Issue::new("1", "1", "Test");
+        issue.blocked_by = vec![BlockerRef {
+            identifier: "2".to_string(),
+            is_active: true,
+        }];
+        assert!(!issue.is_dispatchable());
+    }
+
+    #[test]
+    fn is_dispatchable_false_when_both_done_and_doing() {
+        let mut issue = Issue::new("1", "1", "Test");
+        issue.labels = vec![
+            "symphony-doing".to_string(),
+            "symphony-done".to_string(),
+        ];
+        assert!(!issue.is_dispatchable());
+    }
+
+    // ── is_continuable tests ──
+
+    #[test]
+    fn is_continuable_true_for_open_unlabeled_issue() {
+        let issue = Issue::new("1", "1", "Test");
+        assert!(issue.is_continuable());
+    }
+
+    #[test]
+    fn is_continuable_true_when_symphony_doing() {
+        let mut issue = Issue::new("1", "1", "Test");
+        issue.labels = vec!["symphony-doing".to_string()];
+        assert!(issue.is_continuable());
+    }
+
+    #[test]
+    fn is_continuable_false_when_symphony_done() {
+        let mut issue = Issue::new("1", "1", "Test");
+        issue.labels = vec!["symphony-done".to_string()];
+        assert!(!issue.is_continuable());
+    }
+
+    #[test]
+    fn is_continuable_false_when_closed() {
+        let mut issue = Issue::new("1", "1", "Test");
+        issue.state = "closed".to_string();
+        assert!(!issue.is_continuable());
+    }
+
+    #[test]
+    fn is_continuable_false_when_blocked() {
+        let mut issue = Issue::new("1", "1", "Test");
+        issue.blocked_by = vec![BlockerRef {
+            identifier: "2".to_string(),
+            is_active: true,
+        }];
+        assert!(!issue.is_continuable());
     }
 
     #[test]

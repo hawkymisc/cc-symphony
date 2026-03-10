@@ -66,6 +66,14 @@ impl Tracker for ErrorOnRetryTracker {
     async fn fetch_issues_by_states(&self, states: &[String]) -> Result<Vec<Issue>, TrackerError> {
         self.inner.fetch_issues_by_states(states).await
     }
+
+    async fn add_label(&self, issue_identifier: &str, label: &str) -> Result<(), TrackerError> {
+        self.inner.add_label(issue_identifier, label).await
+    }
+
+    async fn remove_label(&self, issue_identifier: &str, label: &str) -> Result<(), TrackerError> {
+        self.inner.remove_label(issue_identifier, label).await
+    }
 }
 
 /// When fetch_issues_by_ids fails during retry, the RetryEntry should be reinserted
@@ -224,6 +232,14 @@ impl Tracker for AlwaysFailTracker {
     async fn fetch_issues_by_states(&self, _states: &[String]) -> Result<Vec<Issue>, TrackerError> {
         Ok(vec![])
     }
+
+    async fn add_label(&self, _issue_identifier: &str, _label: &str) -> Result<(), TrackerError> {
+        Ok(())
+    }
+
+    async fn remove_label(&self, _issue_identifier: &str, _label: &str) -> Result<(), TrackerError> {
+        Ok(())
+    }
 }
 
 /// Tracker that fails N times then succeeds. Thread-safe via Arc<Mutex<>>.
@@ -260,6 +276,14 @@ impl Tracker for FailThenSucceedTracker {
 
     async fn fetch_issues_by_states(&self, states: &[String]) -> Result<Vec<Issue>, TrackerError> {
         self.inner.fetch_issues_by_states(states).await
+    }
+
+    async fn add_label(&self, issue_identifier: &str, label: &str) -> Result<(), TrackerError> {
+        self.inner.add_label(issue_identifier, label).await
+    }
+
+    async fn remove_label(&self, issue_identifier: &str, label: &str) -> Result<(), TrackerError> {
+        self.inner.remove_label(issue_identifier, label).await
     }
 }
 

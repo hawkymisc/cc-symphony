@@ -44,4 +44,10 @@ pub trait Tracker: Send + Sync {
 
     /// Fetch issues by their states
     async fn fetch_issues_by_states(&self, states: &[String]) -> Result<Vec<Issue>, TrackerError>;
+
+    /// Add a label to an issue (identified by issue number / identifier)
+    async fn add_label(&self, issue_identifier: &str, label: &str) -> Result<(), TrackerError>;
+
+    /// Remove a label from an issue (identified by issue number / identifier)
+    async fn remove_label(&self, issue_identifier: &str, label: &str) -> Result<(), TrackerError>;
 }

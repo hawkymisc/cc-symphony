@@ -85,6 +85,26 @@ impl Tracker for MemoryTracker {
             .cloned()
             .collect())
     }
+
+    async fn add_label(&self, issue_identifier: &str, label: &str) -> Result<(), TrackerError> {
+        let mut issues = self.issues.write().await;
+        if let Some(issue) = issues.iter_mut().find(|i| i.identifier == issue_identifier) {
+            let label_lower = label.to_lowercase();
+            if !issue.labels.contains(&label_lower) {
+                issue.labels.push(label_lower);
+            }
+        }
+        Ok(())
+    }
+
+    async fn remove_label(&self, issue_identifier: &str, label: &str) -> Result<(), TrackerError> {
+        let mut issues = self.issues.write().await;
+        if let Some(issue) = issues.iter_mut().find(|i| i.identifier == issue_identifier) {
+            let label_lower = label.to_lowercase();
+            issue.labels.retain(|l| l != &label_lower);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -132,6 +152,55 @@ mod tests {
 
         let candidates = tracker.fetch_candidate_issues().await.unwrap();
         assert!(candidates.is_empty());
+    }
+
+    #[tokio::test]
+    async fn memory_tracker_add_label() {
+        let tracker = MemoryTracker::new();
+        tracker.add_issue(Issue::new("1", "42", "Test")).await;
+
+        tracker.add_label("42", "symphony-doing").await.unwrap();
+
+        let issues = tracker.get_all().await;
+        assert!(issues[0].labels.contains(&"symphony-doing".to_string()));
+    }
+
+    #[tokio::test]
+    async fn memory_tracker_add_label_idempotent() {
+        let tracker = MemoryTracker::new();
+        tracker.add_issue(Issue::new("1", "42", "Test")).await;
+
+        tracker.add_label("42", "symphony-doing").await.unwrap();
+        tracker.add_label("42", "symphony-doing").await.unwrap();
+
+        let issues = tracker.get_all().await;
+        assert_eq!(issues[0].labels.iter().filter(|l| *l == "symphony-doing").count(), 1);
+    }
+
+    #[tokio::test]
+    async fn memory_tracker_remove_label() {
+        let tracker = MemoryTracker::new();
+        let mut issue = Issue::new("1", "42", "Test");
+        issue.labels = vec!["symphony-doing".to_string(), "bug".to_string()];
+        tracker.add_issue(issue).await;
+
+        tracker.remove_label("42", "symphony-doing").await.unwrap();
+
+        let issues = tracker.get_all().await;
+        assert!(!issues[0].labels.contains(&"symphony-doing".to_string()));
+        assert!(issues[0].labels.contains(&"bug".to_string()));
+    }
+
+    #[tokio::test]
+    async fn memory_tracker_remove_label_not_present() {
+        let tracker = MemoryTracker::new();
+        tracker.add_issue(Issue::new("1", "42", "Test")).await;
+
+        // Removing a label that doesn't exist should succeed
+        tracker.remove_label("42", "symphony-doing").await.unwrap();
+
+        let issues = tracker.get_all().await;
+        assert!(issues[0].labels.is_empty());
     }
 
     #[tokio::test]
