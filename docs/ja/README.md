@@ -237,6 +237,7 @@ claude:
 | トラッカー障害バックオフ | 連続するトラッカーポーリング障害で指数バックオフ（最大5分）; `skip_ticks_until` による非ブロッキング |
 | API キーマスキング | `TrackerConfig` と `GitHubConfig` のカスタム `Debug` 実装で `api_key` を `[REDACTED]` に置換 |
 | リトライキューエビクション | `max_retry_queue_size`（デフォルト 1000）; 満杯時に最古のエントリをエビクション、ワークスペースは非同期でクリーンアップ |
+| ラベルベースのディスパッチ制御 | `symphony-doing`（オーケストレータが自動管理）と `symphony-done`（エージェントが設定）ラベルで無限再ディスパッチループを防止; [ラベルライフサイクル](#ラベルライフサイクル)参照 |
 
 ### 🔲 未実装
 
@@ -249,6 +250,58 @@ claude:
 | 設定ホットリロード | `ConfigReloaded` メッセージは存在するが WORKFLOW.md の再解析は行わない |
 | ステートごとの並行数制限 | グローバル制限のみ; ラベル / プロジェクトごとのスロット制御なし |
 | プライオリティベースのディスパッチ | GitHub Issues にはネイティブのプライオリティフィールドがない; ディスパッチは常に最古優先（created_at）にフォールバック |
+
+---
+
+## ラベルライフサイクル
+
+Symphony は2つの予約 GitHub ラベルを使い、Issue の進捗管理と無限再ディスパッチループの防止を行います。
+GitHub Issues は `open` / `closed` の2状態しかないため、ラベルがオーケストレータに作業完了を
+伝える軽量なシグナルとなります（Issue をクローズせずに済みます）。
+
+| ラベル | 管理者 | 意味 |
+|-------|--------|------|
+| `symphony-doing` | **オーケストレータ**（自動） | 作業中 — 他インスタンスからの新規ディスパッチをブロック |
+| `symphony-done` | **エージェント**（ワークフロー経由） | 作業完了 — 再ディスパッチループを停止 |
+
+**フロー:**
+
+```
+Issue 作成（open、ラベルなし）
+  │
+  ▼
+オーケストレータがディスパッチ ──→ `symphony-doing` を付与
+  │
+  ▼
+エージェントがタスクを実行・完了
+  │
+  ▼
+エージェントが `symphony-done` を付与 ──→ オーケストレータが `symphony-doing` を除去
+  │
+  ▼
+Issue は `symphony-done` 付きで open のまま ──→ 再ディスパッチなし
+  │
+  ▼
+人間がレビューして Issue をクローズ
+```
+
+エージェントにラベルを付与させるには、ワークフローテンプレートに完了プロトコルを記述します：
+
+```markdown
+## 完了プロトコル
+
+作業が完了したら：
+1. `symphony-done` ラベルを付与：
+   `gh issue edit {{ issue.identifier }} --repo owner/repo --add-label symphony-done`
+2. Issue はクローズしないでください — 人間がレビューしてクローズします。
+```
+
+> **注意**: Symphony を実行する前に、リポジトリに両方のラベルを作成してください。
+>
+> ```bash
+> gh label create symphony-doing --description "Symphony: agent working" --color FBCA04
+> gh label create symphony-done  --description "Symphony: agent completed" --color 0E8A16
+> ```
 
 ---
 

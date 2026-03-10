@@ -161,6 +161,65 @@ Prompt template here. Available variables:
 
 ---
 
+## Label Lifecycle
+
+Symphony uses two reserved GitHub labels to track issue progress and prevent infinite re-dispatch
+loops. Since GitHub Issues only have `open` / `closed` states, labels provide a lightweight signal
+for the orchestrator to know when work is complete — without requiring issue closure.
+
+Symphony は2つの予約ラベルを使い、Issue の進捗管理と無限再ディスパッチループの防止を行います。
+GitHub Issues は `open` / `closed` の2状態しかないため、ラベルがオーケストレータに作業完了を
+伝える軽量なシグナルとなります（Issue をクローズせずに済みます）。
+
+| Label | Managed by | Meaning / 意味 |
+|-------|-----------|----------------|
+| `symphony-doing` | **Orchestrator** (automatic) | Work in progress — blocks new dispatch from other instances / 作業中 — 他インスタンスからの新規ディスパッチをブロック |
+| `symphony-done` | **Agent** (via workflow) | Work complete — stops re-dispatch loop / 作業完了 — 再ディスパッチループを停止 |
+
+**Flow / フロー:**
+
+```
+Issue created (open, no labels)
+  │
+  ▼
+Orchestrator dispatches ──→ adds `symphony-doing`
+  │
+  ▼
+Agent runs and completes task
+  │
+  ▼
+Agent adds `symphony-done` ──→ Orchestrator removes `symphony-doing`
+  │
+  ▼
+Issue remains open with `symphony-done` ──→ no re-dispatch
+  │
+  ▼
+Human reviews and closes issue
+```
+
+To instruct the agent to add the label, include a completion protocol in your workflow template:
+
+エージェントにラベルを付与させるには、ワークフローテンプレートに完了プロトコルを記述します:
+
+```markdown
+## Completion protocol
+
+When your work is complete:
+1. Add the `symphony-done` label:
+   `gh issue edit {{ issue.identifier }} --repo owner/repo --add-label symphony-done`
+2. Do NOT close the issue — a human will review and close it.
+```
+
+> **Note**: Create both labels in your repository before running Symphony.
+> **注意**: Symphony を実行する前に、リポジトリに両方のラベルを作成してください。
+>
+> ```bash
+> gh label create symphony-doing --description "Symphony: agent working" --color FBCA04
+> gh label create symphony-done  --description "Symphony: agent completed" --color 0E8A16
+> ```
+
+---
+
 ## Security & Token Setup
 
 ### Token Architecture
@@ -238,6 +297,7 @@ When `skip_permissions: true`, Claude Code runs with `--dangerously-skip-permiss
 | Tracker failure backoff | Consecutive tracker poll failures trigger exponential backoff (capped at 5 min); non-blocking via `skip_ticks_until` |
 | API key masking | `TrackerConfig` and `GitHubConfig` custom `Debug` impls replace `api_key` with `[REDACTED]` |
 | Retry queue eviction | `max_retry_queue_size` (default 1000); oldest entry evicted when full, workspace cleaned up asynchronously |
+| Label-based dispatch control | `symphony-doing` (auto-managed by orchestrator) and `symphony-done` (set by agent) labels prevent infinite re-dispatch loops; see [Label Lifecycle](#label-lifecycle) |
 
 ### 🔲 Not Yet Implemented
 
