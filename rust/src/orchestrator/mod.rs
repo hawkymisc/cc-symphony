@@ -375,6 +375,12 @@ impl<T: Tracker + 'static, A: AgentRunner + 'static> Orchestrator<T, A> {
             let elapsed_secs = (chrono::Utc::now() - entry.started_at).num_milliseconds().max(0) as u64 / 1000;
             state.agent_totals.add_seconds(elapsed_secs);
 
+            // Remove symphony-doing label so a fresh orchestrator instance can
+            // recover this issue after a restart (best-effort, non-fatal).
+            if let Err(e) = self.tracker.remove_label(&identifier, "symphony-doing").await {
+                warn!(identifier = %identifier, error = %e, "Failed to remove symphony-doing label on worker finish (non-fatal)");
+            }
+
             match result {
                 Ok(()) => {
                     info!(issue_id = %issue_id, identifier = %identifier, "Worker finished successfully");

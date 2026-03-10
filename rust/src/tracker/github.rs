@@ -357,10 +357,17 @@ impl GitHubTracker {
 
     /// Derive the REST API base URL from the GraphQL endpoint.
     ///
-    /// - `https://api.github.com/graphql` → `https://api.github.com`
-    /// - `http://localhost:1234/graphql`   → `http://localhost:1234`
+    /// - `https://api.github.com/graphql`      → `https://api.github.com`
+    /// - `https://ghes.example.com/api/graphql` → `https://ghes.example.com/api/v3`
+    /// - `http://localhost:1234/graphql`         → `http://localhost:1234`
     fn rest_base_url(&self) -> String {
-        self.config.endpoint.trim_end_matches("/graphql").to_string()
+        let base = self.config.endpoint.trim_end_matches("/graphql");
+        // GitHub Enterprise Server: /api/graphql → /api/v3
+        if base.ends_with("/api") {
+            format!("{}/v3", base)
+        } else {
+            base.to_string()
+        }
     }
 }
 
@@ -574,5 +581,19 @@ mod tests {
         };
         let tracker = GitHubTracker::new(config).unwrap();
         assert_eq!(tracker.rest_base_url(), "http://localhost:4010");
+    }
+
+    #[test]
+    fn rest_base_url_github_enterprise_appends_v3() {
+        let config = GitHubConfig {
+            endpoint: "https://ghes.example.com/api/graphql".to_string(),
+            api_key: "test".to_string(),
+            repo: "owner/repo".to_string(),
+            labels: vec![],
+            active_states: vec!["open".to_string()],
+            terminal_states: vec!["closed".to_string()],
+        };
+        let tracker = GitHubTracker::new(config).unwrap();
+        assert_eq!(tracker.rest_base_url(), "https://ghes.example.com/api/v3");
     }
 }

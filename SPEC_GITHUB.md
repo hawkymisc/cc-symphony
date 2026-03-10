@@ -812,10 +812,12 @@ from re-dispatching completed work.
 | `symphony-doing` | An orchestrator instance is actively working on this issue | Blocked | Allowed (same instance) |
 | `symphony-done` | Agent has completed its work on this issue | Blocked | Blocked |
 
-- The agent (or workflow hooks) is responsible for adding/removing these labels via `gh` CLI or
-  GitHub API.
-- The orchestrator reads labels but never writes them; label management is the agent's responsibility
-  (consistent with SPEC §1 boundary: "Ticket writes are performed by the coding agent").
+- The orchestrator manages the `symphony-doing` label automatically (adds on dispatch, removes on
+  worker finish / claim release / reconciliation cancel). This is an exception to the general
+  SPEC §1 boundary ("Ticket writes are performed by the coding agent") because `symphony-doing`
+  is orchestrator-internal state that must track the process lifecycle reliably.
+- The agent (or workflow hooks) is responsible for adding `symphony-done` via `gh` CLI or GitHub
+  API when the task is complete. The orchestrator never adds `symphony-done`.
 - When an issue has `symphony-done`, the continuation retry loop (§7.2–7.3) stops, preventing
   infinite re-dispatch even if the issue remains `open`.
 
