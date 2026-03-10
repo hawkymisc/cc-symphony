@@ -76,6 +76,7 @@ impl AgentRunner for ClaudeRunner {
         // Build command
         let mut cmd = Command::new(&config.claude.command);
         cmd.arg("--print")
+            .arg("--verbose")
             .arg("--output-format").arg("stream-json")
             .arg("--model").arg(&config.claude.model)
             .arg("--max-turns").arg(config.claude.max_turns_per_invocation.to_string())
