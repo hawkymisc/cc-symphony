@@ -983,6 +983,7 @@ Subprocess launch parameters:
 - Command: `claude.command` (default: `claude`)
 - Arguments:
   - `--print` (non-interactive mode, output to stdout)
+  - `--verbose` (required by `stream-json` output format since Claude Code v2.1.x)
   - `--output-format stream-json` (newline-delimited JSON events on stdout)
   - `--model <claude.model>`
   - `--max-turns <claude.max_turns_per_invocation>`
@@ -1621,7 +1622,7 @@ Validation profiles:
 ### 17.5 Coding-Agent CLI Client [Claude]
 
 - Launch command uses workspace cwd and invokes Claude Code with correct arguments
-- `--print` and `--output-format stream-json` are always passed
+- `--print`, `--verbose`, and `--output-format stream-json` are always passed
 - `--model` uses configured model
 - `--dangerously-skip-permissions` is passed when `skip_permissions` is true
 - `--allowedTools` is passed when `allowed_tools` is configured
