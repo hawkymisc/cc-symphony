@@ -361,7 +361,9 @@ impl GitHubTracker {
     /// - `https://ghes.example.com/api/graphql` → `https://ghes.example.com/api/v3`
     /// - `http://localhost:1234/graphql`         → `http://localhost:1234`
     fn rest_base_url(&self) -> String {
-        let base = self.config.endpoint.trim_end_matches("/graphql");
+        // Normalize trailing slash before stripping /graphql
+        let normalized = self.config.endpoint.trim_end_matches('/');
+        let base = normalized.trim_end_matches("/graphql");
         // GitHub Enterprise Server: /api/graphql → /api/v3
         if base.ends_with("/api") {
             format!("{}/v3", base)
@@ -581,6 +583,34 @@ mod tests {
         };
         let tracker = GitHubTracker::new(config).unwrap();
         assert_eq!(tracker.rest_base_url(), "http://localhost:4010");
+    }
+
+    #[test]
+    fn rest_base_url_trailing_slash_normalized() {
+        let config = GitHubConfig {
+            endpoint: "https://api.github.com/graphql/".to_string(),
+            api_key: "test".to_string(),
+            repo: "owner/repo".to_string(),
+            labels: vec![],
+            active_states: vec!["open".to_string()],
+            terminal_states: vec!["closed".to_string()],
+        };
+        let tracker = GitHubTracker::new(config).unwrap();
+        assert_eq!(tracker.rest_base_url(), "https://api.github.com");
+    }
+
+    #[test]
+    fn rest_base_url_ghes_trailing_slash_normalized() {
+        let config = GitHubConfig {
+            endpoint: "https://ghes.example.com/api/graphql/".to_string(),
+            api_key: "test".to_string(),
+            repo: "owner/repo".to_string(),
+            labels: vec![],
+            active_states: vec!["open".to_string()],
+            terminal_states: vec!["closed".to_string()],
+        };
+        let tracker = GitHubTracker::new(config).unwrap();
+        assert_eq!(tracker.rest_base_url(), "https://ghes.example.com/api/v3");
     }
 
     #[test]

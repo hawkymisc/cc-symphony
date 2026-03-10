@@ -202,7 +202,28 @@ impl<T: Tracker + 'static, A: AgentRunner + 'static> Orchestrator<T, A> {
             }
         }
 
+        // Graceful shutdown: remove symphony-doing labels from all running/claimed issues
+        // so a restarted orchestrator can pick them up again.
+        self.cleanup_labels_on_shutdown(&state).await;
+
         info!("Orchestrator stopped");
+    }
+
+    /// Remove `symphony-doing` labels from all in-flight issues on shutdown.
+    /// Best-effort: failures are logged but do not prevent shutdown.
+    async fn cleanup_labels_on_shutdown(&self, state: &OrchestratorState) {
+        for (_, entry) in state.running.iter() {
+            if let Err(e) = self.tracker.remove_label(&entry.identifier, "symphony-doing").await {
+                warn!(identifier = %entry.identifier, error = %e, "Failed to remove symphony-doing on shutdown (non-fatal)");
+            }
+        }
+        for (issue_id, retry_entry) in state.retry_attempts.iter() {
+            if let Some(ref ident) = retry_entry.identifier {
+                if let Err(e) = self.tracker.remove_label(ident, "symphony-doing").await {
+                    warn!(issue_id = %issue_id, error = %e, "Failed to remove symphony-doing for retrying issue on shutdown (non-fatal)");
+                }
+            }
+        }
     }
 
     async fn handle_tick(&self, state: &mut OrchestratorState) {
