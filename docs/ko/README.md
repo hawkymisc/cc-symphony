@@ -129,7 +129,7 @@ tracker:
 
 agent:
   max_concurrent_agents: 10  # 기본값: 10
-  max_turns: 20              # 기본값: 20; 포기 전 최대 오케스트레이터 레벨 재시도 횟수
+  max_turns: 20              # 기본값: 20; 예약됨 — 미구현
   max_retry_backoff_ms: 300000  # 기본값: 5분
   max_retry_queue_size: 1000    # 기본값: 1000; 가득 차면 가장 오래된 항목 퇴거
 
@@ -139,10 +139,10 @@ polling:
 claude:
   command: "claude"          # 기본값: claude
   model: "claude-sonnet-4-20250514"
-  max_turns_per_invocation: 50
+  max_turns_per_invocation: 50  # 기본값: 50
   skip_permissions: false    # 신뢰할 수 있는 환경에서만 true로 설정
-  allowed_tools:             # skip_permissions=false인 경우 필수; 허용된 도구 목록
-    - "Bash"
+  allowed_tools:             # skip_permissions=false인 경우 필수 (이 목록 또는 skip_permissions: true 중 하나)
+    - "Bash"                 # 예시용 — 워크플로에 맞게 조정; Bash는 전체 셸 접근 권한 부여
     - "Read"
     - "Write"
 
